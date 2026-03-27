@@ -24,7 +24,8 @@ def CC_ARC4 : CallingConv<[
 ]>;
 
 def RetCC_ARC4 : CallingConv<[
-  CCIfType<[i32], CCAssignToReg<[R0]>>
+  // Return values in r0, r1 (for multi-word returns like smul_lohi)
+  CCIfType<[i32], CCAssignToReg<[R0, R1]>>
 ]>;
 
 // Callee-saved registers: r13-r26 (general callee-saved)

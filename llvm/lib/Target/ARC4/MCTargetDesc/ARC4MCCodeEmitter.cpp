@@ -119,13 +119,100 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
   }
   if (Opc == ARC4::CG_MOVli) {
     // MOV dst, limm → AND dst, limm (B=62, C=62)
-    // Encoding: I=0x0C(AND), A=dst, B=62, C=62, followed by 32-bit limm
     uint32_t A = regEnc(MI.getOperand(0));
     uint32_t Word = (0x0Cu << 27) | (A << 21) | (62u << 15) | (62u << 9);
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     emitLimm(MI.getOperand(1), /*FixupOff=*/4, Fixups, CB);
     return;
   }
+
+  // Handle codegen-only load/store (may have different operand order than MC forms)
+  if (Opc == ARC4::CG_LDri) {
+    // CG_LDri: dst(reg), base(reg), offset(imm) → LD shimm: A=dst, B=base, D=offset
+    uint32_t A = regEnc(MI.getOperand(0));
+    uint32_t B = regEnc(MI.getOperand(1));
+    uint32_t D = (uint32_t)MI.getOperand(2).getImm() & 0x1FF;
+    uint32_t Word = (0x01u << 27) | (A << 21) | (B << 15) | (D & 0x1FF);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  if (Opc == ARC4::CG_STri) {
+    // CG_STri: src(reg), base(reg), offset(imm) → ST shimm: A=0(flags), B=base, C=src, D=offset
+    uint32_t C = regEnc(MI.getOperand(0));
+    uint32_t B = regEnc(MI.getOperand(1));
+    uint32_t D = (uint32_t)MI.getOperand(2).getImm() & 0x1FF;
+    uint32_t Word = (0x02u << 27) | (B << 15) | (C << 9) | (D & 0x1FF);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  if (Opc == ARC4::CG_LDrr) {
+    // CG_LDrr: dst(reg), base(reg), off(reg)
+    uint32_t A = regEnc(MI.getOperand(0));
+    uint32_t B = regEnc(MI.getOperand(1));
+    uint32_t Cv = regEnc(MI.getOperand(2));
+    uint32_t Word = (0x00u << 27) | (A << 21) | (B << 15) | (Cv << 9);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+
+  // Handle codegen-only call/compare/branch/return instructions.
+  if (Opc == ARC4::CG_CALLi) {
+    // JL [limm]: I=7, A=31(blink), B=62(limm), C=0
+    uint32_t Word = (0x07u << 27) | (31u << 21) | (62u << 15);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    emitLimm(MI.getOperand(0), /*FixupOff=*/4, Fixups, CB);
+    return;
+  }
+  if (Opc == ARC4::CG_CALLr) {
+    // JL [reg]: I=7, A=31(blink), B=reg, C=0
+    uint32_t B = regEnc(MI.getOperand(0));
+    uint32_t Word = (0x07u << 27) | (31u << 21) | (B << 15);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  // Shift-by-1: ASR/LSR (single operand, opcode 0x03)
+  if (Opc == ARC4::CG_ASR) {
+    uint32_t A = regEnc(MI.getOperand(0)); // dst
+    uint32_t B = regEnc(MI.getOperand(1)); // src
+    // I=0x03, C=1(ASR sub-opcode)
+    uint32_t Word = (0x03u << 27) | (A << 21) | (B << 15) | (1u << 9);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  if (Opc == ARC4::CG_LSR) {
+    uint32_t A = regEnc(MI.getOperand(0));
+    uint32_t B = regEnc(MI.getOperand(1));
+    // I=0x03, C=2(LSR sub-opcode)
+    uint32_t Word = (0x03u << 27) | (A << 21) | (B << 15) | (2u << 9);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  if (Opc == ARC4::CG_CMPrr) {
+    // SUB.F 0, src1, src2: I=0xA, A=63(discard), F=1
+    uint32_t B = regEnc(MI.getOperand(0));
+    uint32_t C = regEnc(MI.getOperand(1));
+    uint32_t Word = (0x0Au << 27) | (63u << 21) | (B << 15) | (C << 9) | (1u << 8);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  if (Opc == ARC4::CG_CMPri) {
+    // SUB.F 0, src, shimm: I=0xA, A=63, C=61(shimm+flags), D=value
+    uint32_t B = regEnc(MI.getOperand(0));
+    uint32_t D = (uint32_t)MI.getOperand(1).getImm() & 0x1FF;
+    uint32_t Word = (0x0Au << 27) | (63u << 21) | (B << 15) | (61u << 9) | D;
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  if (Opc == ARC4::CG_RET) {
+    // J [blink]: I=7, A=0, B=31, C=0
+    uint32_t Word = (0x07u << 27) | (31u << 15);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+
+  // Skip any pseudo instructions that somehow reach the encoder
+  if (MCII.get(Opc).isPseudo())
+    return;
 
   const MCInstrDesc &Desc = MCII.get(Opc);
   uint64_t TSF = Desc.TSFlags;

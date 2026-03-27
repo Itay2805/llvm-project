@@ -108,12 +108,20 @@ static unsigned mapCGtoMC(unsigned Opc, bool &NeedsRegFmtTrail,
   case ARC4::CG_CMPrr: return 0; // handled specially
   case ARC4::CG_CMPri: return 0;
 
-  // Branch/Jump/Return: pass through (handled by AsmPrinter or pattern)
-  case ARC4::CG_RET:   return ARC4::J_r;
-  case ARC4::CG_BR:    return ARC4::B;
-  case ARC4::CG_BRcc:  return ARC4::B;
-  case ARC4::CG_CALLi: return ARC4::JL_l;
-  case ARC4::CG_CALLr: return ARC4::JL_r;
+  // Shift-by-1: handled in code emitter
+  case ARC4::CG_ASR: return 0;
+  case ARC4::CG_LSR: return 0;
+
+  // Calls handled specially below (not through trail mechanism)
+  case ARC4::CG_CALLi: return 0;
+  case ARC4::CG_CALLr: return 0;
+
+  // Branches need NN=0, Q=0 trailing operands
+  case ARC4::CG_BR:    return 0; // handled specially below
+  case ARC4::CG_BRcc:  return 0; // handled specially below
+
+  // Return handled specially below
+  case ARC4::CG_RET:   return 0;
 
   default: return 0; // pass through as-is
   }
@@ -130,6 +138,67 @@ void ARC4MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.setOpcode(MCOpc);
   else
     OutMI.setOpcode(MI->getOpcode());
+
+  // === Handle all special cases FIRST (before generic operand loop) ===
+
+  // CG_CALLi / CG_CALLr → detect symbol vs register from the first operand
+  if (MI->getOpcode() == ARC4::CG_CALLi ||
+      MI->getOpcode() == ARC4::CG_CALLr) {
+    const MachineOperand &TargetMO = MI->getOperand(0);
+    MCOperand Target = LowerOperand(TargetMO);
+    if (TargetMO.isReg()) {
+      // Register call: JL [reg]
+      OutMI.setOpcode(ARC4::CG_CALLr);
+    } else {
+      // Symbol/address call: JL [symbol] (limm)
+      OutMI.setOpcode(ARC4::CG_CALLi);
+    }
+    if (Target.isValid())
+      OutMI.addOperand(Target);
+    return;
+  }
+  // CG_BR → B with target, NN=0, Q=0
+  if (MI->getOpcode() == ARC4::CG_BR) {
+    OutMI.setOpcode(ARC4::B);
+    for (const MachineOperand &MO : MI->operands()) {
+      MCOperand MCOp = LowerOperand(MO);
+      if (MCOp.isValid())
+        OutMI.addOperand(MCOp);
+    }
+    OutMI.addOperand(MCOperand::createImm(0)); // NN
+    OutMI.addOperand(MCOperand::createImm(0)); // Q
+    return;
+  }
+  // CG_BRcc → B with target, NN=0, Q=cc
+  if (MI->getOpcode() == ARC4::CG_BRcc) {
+    OutMI.setOpcode(ARC4::B);
+    // Find MBB target and CC immediate from operands
+    // (operand positions may shift due to implicit operands)
+    unsigned CC = 0;
+    for (const MachineOperand &MO : MI->operands()) {
+      if (MO.isMBB()) {
+        MCOperand Target = LowerOperand(MO);
+        if (Target.isValid())
+          OutMI.addOperand(Target);
+      } else if (MO.isImm()) {
+        CC = MO.getImm();
+      }
+    }
+    OutMI.addOperand(MCOperand::createImm(0)); // NN
+    OutMI.addOperand(MCOperand::createImm(CC)); // Q
+    return;
+  }
+  // CG_RET → J_r with B=r31(blink), F=0, NN=0, Q=0
+  if (MI->getOpcode() == ARC4::CG_RET) {
+    OutMI.setOpcode(ARC4::J_r);
+    OutMI.addOperand(MCOperand::createReg(ARC4::R31));
+    OutMI.addOperand(MCOperand::createImm(0)); // F
+    OutMI.addOperand(MCOperand::createImm(0)); // NN
+    OutMI.addOperand(MCOperand::createImm(0)); // Q
+    return;
+  }
+
+  // === MOV special cases ===
 
   // Special: MOV rr → AND dst, src, src (duplicate the source reg)
   if (IsMOVrr) {
@@ -198,11 +267,14 @@ void ARC4MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
-  // Special: CG_RET → J_r with B=r31(blink)
-  if (MI->getOpcode() == ARC4::CG_RET) {
-    OutMI.setOpcode(ARC4::J_r);
-    OutMI.addOperand(MCOperand::createReg(ARC4::R31));
-    OutMI.addOperand(MCOperand::createImm(0)); // F
+  // Special: CG_BR → B with target, NN=0, Q=0
+  if (MI->getOpcode() == ARC4::CG_BR) {
+    OutMI.setOpcode(ARC4::B);
+    for (const MachineOperand &MO : MI->operands()) {
+      MCOperand MCOp = LowerOperand(MO);
+      if (MCOp.isValid())
+        OutMI.addOperand(MCOp);
+    }
     OutMI.addOperand(MCOperand::createImm(0)); // NN
     OutMI.addOperand(MCOperand::createImm(0)); // Q
     return;

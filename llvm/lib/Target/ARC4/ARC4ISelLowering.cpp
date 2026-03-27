@@ -33,20 +33,31 @@ ARC4TargetLowering::ARC4TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::MUL, MVT::i32, LibCall);
   setOperationAction(ISD::MULHS, MVT::i32, Expand);
   setOperationAction(ISD::MULHU, MVT::i32, Expand);
+  setOperationAction(ISD::UMUL_LOHI, MVT::i32, Expand);
+  setOperationAction(ISD::SMUL_LOHI, MVT::i32, Expand);
   setOperationAction(ISD::SDIV, MVT::i32, LibCall);
   setOperationAction(ISD::UDIV, MVT::i32, LibCall);
   setOperationAction(ISD::SREM, MVT::i32, LibCall);
   setOperationAction(ISD::UREM, MVT::i32, LibCall);
 
   // Branch/select handling
+  // BR_CC: custom-lower to CMP + conditional branch
   setOperationAction(ISD::BR_CC, MVT::i32, Custom);
-  setOperationAction(ISD::SELECT_CC, MVT::i32, Expand);
-  setOperationAction(ISD::SELECT, MVT::i32, Expand);
+  // SELECT_CC: custom-lower to CMP + conditional select sequence
+  setOperationAction(ISD::SELECT_CC, MVT::i32, Custom);
+  // SELECT and SETCC: keep legal (tablegen patterns or custom)
+  // SETCC produces a 0/1 result via compare + conditional logic
   setOperationAction(ISD::SETCC, MVT::i32, Expand);
+  setOperationAction(ISD::SELECT, MVT::i32, Custom);
   setOperationAction(ISD::BRCOND, MVT::Other, Expand);
 
   // Global addresses
   setOperationAction(ISD::GlobalAddress, MVT::i32, Custom);
+
+  // Shifts: ARC4 has no barrel shifter (only shift-by-1 ASR/LSR).
+  // Use Expand to generate shift loops, or LibCall if available.
+  // For now, leave as Legal and let ISel handle constant shifts
+  // via repeated shift-by-1, and variable shifts via libcall.
 
   // Sign/zero extend loads
   setLoadExtAction(ISD::SEXTLOAD, MVT::i32, MVT::i8, Expand);
@@ -79,6 +90,8 @@ SDValue ARC4TargetLowering::LowerOperation(SDValue Op,
     return LowerBR_CC(Op, DAG);
   case ISD::SELECT_CC:
     return LowerSELECT_CC(Op, DAG);
+  case ISD::SELECT:
+    return LowerSELECT(Op, DAG);
   case ISD::GlobalAddress:
     return LowerGlobalAddress(Op, DAG);
   default:
@@ -91,8 +104,9 @@ const char *ARC4TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARC4ISD::CALL:     return "ARC4ISD::CALL";
   case ARC4ISD::RET_GLUE: return "ARC4ISD::RET_GLUE";
   case ARC4ISD::CMP:      return "ARC4ISD::CMP";
-  case ARC4ISD::BR_CC:    return "ARC4ISD::BR_CC";
-  default:                return nullptr;
+  case ARC4ISD::BR_CC:      return "ARC4ISD::BR_CC";
+  case ARC4ISD::SELECT_CC:  return "ARC4ISD::SELECT_CC";
+  default:                  return nullptr;
   }
 }
 
@@ -179,6 +193,9 @@ SDValue ARC4TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   CallingConv::ID CallConv = CLI.CallConv;
   bool IsVarArg = CLI.IsVarArg;
   MachineFunction &MF = DAG.getMachineFunction();
+
+  // Disable tail calls for MVP - we don't handle them yet
+  CLI.IsTailCall = false;
 
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
@@ -295,9 +312,55 @@ SDValue ARC4TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
 
 SDValue ARC4TargetLowering::LowerSELECT_CC(SDValue Op,
                                             SelectionDAG &DAG) const {
-  // Let LLVM expand SELECT_CC into branches. We set the action to Expand
-  // in the constructor, but this is here as a safety net.
-  return SDValue();
+  SDLoc DL(Op);
+  SDValue LHS = Op.getOperand(0);
+  SDValue RHS = Op.getOperand(1);
+  SDValue TrueVal = Op.getOperand(2);
+  SDValue FalseVal = Op.getOperand(3);
+  ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(4))->get();
+
+  // Lower SELECT_CC to: cmp LHS, RHS → BR_CC to select true/false
+  // Emit as: CMP + SELECT(cc, true, false)
+  SDValue Cmp = DAG.getNode(ARC4ISD::CMP, DL, MVT::Glue, LHS, RHS);
+  SDValue CCVal = DAG.getConstant(ARC4CC(CC), DL, MVT::i32);
+  return DAG.getNode(ARC4ISD::SELECT_CC, DL, Op.getValueType(),
+                     TrueVal, FalseVal, CCVal, Cmp);
+}
+
+SDValue ARC4TargetLowering::LowerSELECT(SDValue Op,
+                                         SelectionDAG &DAG) const {
+  // SELECT(cond, true, false) → SELECT_CC(cond, 0, true, false, NE)
+  SDLoc DL(Op);
+  SDValue Cond = Op.getOperand(0);
+  SDValue TrueVal = Op.getOperand(1);
+  SDValue FalseVal = Op.getOperand(2);
+
+  SDValue Zero = DAG.getConstant(0, DL, MVT::i32);
+  SDValue Cmp = DAG.getNode(ARC4ISD::CMP, DL, MVT::Glue, Cond, Zero);
+  SDValue CCVal = DAG.getConstant(ARC4CC(ISD::SETNE), DL, MVT::i32);
+  return DAG.getNode(ARC4ISD::SELECT_CC, DL, Op.getValueType(),
+                     TrueVal, FalseVal, CCVal, Cmp);
+}
+
+SDValue ARC4TargetLowering::LowerShift(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue LHS = Op.getOperand(0);
+  SDValue RHS = Op.getOperand(1);
+
+  // Map shift opcode to runtime library function
+  RTLIB::Libcall LC;
+  switch (Op.getOpcode()) {
+  case ISD::SHL: LC = RTLIB::SHL_I32; break;
+  case ISD::SRL: LC = RTLIB::SRL_I32; break;
+  case ISD::SRA: LC = RTLIB::SRA_I32; break;
+  default: llvm_unreachable("unexpected shift opcode");
+  }
+
+  // Emit a library call: result = __ashlsi3(lhs, rhs) etc.
+  TargetLowering::MakeLibCallOptions CallOptions;
+  SDValue Args[] = {LHS, RHS};
+  auto Call = makeLibCall(DAG, LC, MVT::i32, Args, CallOptions, DL);
+  return Call.first;
 }
 
 SDValue ARC4TargetLowering::LowerGlobalAddress(SDValue Op,
@@ -308,4 +371,68 @@ SDValue ARC4TargetLowering::LowerGlobalAddress(SDValue Op,
   // For MVP: just return the target global address directly.
   // The instruction selector will materialize it as a limm load.
   return DAG.getTargetGlobalAddress(GV, DL, MVT::i32, Offset);
+}
+
+//===----------------------------------------------------------------------===//
+// Custom inserter for SELECT_CC pseudo
+//===----------------------------------------------------------------------===//
+
+MachineBasicBlock *ARC4TargetLowering::EmitInstrWithCustomInserter(
+    MachineInstr &MI, MachineBasicBlock *MBB) const {
+  assert(MI.getOpcode() == ARC4::CG_SELECT_CC && "Unexpected custom inserter");
+
+  const TargetInstrInfo &TII = *Subtarget.getInstrInfo();
+  DebugLoc DL = MI.getDebugLoc();
+
+  // CG_SELECT_CC dst, trueVal, falseVal, cc
+  Register Dst = MI.getOperand(0).getReg();
+  Register TrueVal = MI.getOperand(1).getReg();
+  Register FalseVal = MI.getOperand(2).getReg();
+  unsigned CC = MI.getOperand(3).getImm();
+
+  // Create the diamond:
+  //   MBB:
+  //     ...                  (flags already set by CMP before this)
+  //     Bcc trueMBB, cc
+  //   falseMBB:
+  //     ... (fallthrough)
+  //   trueMBB:
+  //     dst = PHI(trueVal, MBB, falseVal, falseMBB)
+
+  MachineFunction *MF = MBB->getParent();
+  const BasicBlock *BB = MBB->getBasicBlock();
+
+  MachineBasicBlock *FalseMBB = MF->CreateMachineBasicBlock(BB);
+  MachineBasicBlock *SinkMBB = MF->CreateMachineBasicBlock(BB);
+
+  MachineFunction::iterator It = ++MBB->getIterator();
+  MF->insert(It, FalseMBB);
+  MF->insert(It, SinkMBB);
+
+  // Transfer rest of MBB to SinkMBB
+  SinkMBB->splice(SinkMBB->begin(), MBB,
+                  std::next(MachineBasicBlock::iterator(MI)), MBB->end());
+  SinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
+
+  // MBB → conditional branch to SinkMBB (true path), fallthrough to FalseMBB
+  MBB->addSuccessor(FalseMBB);
+  MBB->addSuccessor(SinkMBB);
+
+  // Emit conditional branch: Bcc SinkMBB
+  BuildMI(MBB, DL, TII.get(ARC4::CG_BRcc))
+      .addMBB(SinkMBB)
+      .addImm(CC);
+
+  // FalseMBB falls through to SinkMBB
+  FalseMBB->addSuccessor(SinkMBB);
+
+  // SinkMBB: PHI to select the result
+  BuildMI(*SinkMBB, SinkMBB->begin(), DL, TII.get(ARC4::PHI), Dst)
+      .addReg(TrueVal)
+      .addMBB(MBB)
+      .addReg(FalseVal)
+      .addMBB(FalseMBB);
+
+  MI.eraseFromParent();
+  return SinkMBB;
 }

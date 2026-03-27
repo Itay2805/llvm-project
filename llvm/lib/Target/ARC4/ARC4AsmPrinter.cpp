@@ -51,6 +51,35 @@ void ARC4AsmPrinter::emitInstruction(const MachineInstr *MI) {
       MI->getOpcode() == ARC4::ADJCALLSTACKUP)
     return;
 
+  // CG_BRcc: emit conditional branch with proper suffix in text output.
+  // The MCInstLower produces B with Q field, but the B AsmString doesn't
+  // print the condition code suffix. Handle it here for readable assembly.
+  if (MI->getOpcode() == ARC4::CG_BRcc) {
+    static const char *CCNames[] = {
+        "",   "eq", "ne", "pl", "mi", "cs", "cc", "vs",
+        "vc", "gt", "ge", "lt", "le", "hi", "ls", "pnz"};
+    unsigned CC = 0;
+    const MachineOperand *TargetMO = nullptr;
+    for (const MachineOperand &MO : MI->operands()) {
+      if (MO.isMBB())
+        TargetMO = &MO;
+      else if (MO.isImm())
+        CC = MO.getImm();
+    }
+    // Still emit through MCInst for correct binary encoding
+    MCInst TmpInst;
+    MCInstLowering.Lower(MI, TmpInst);
+    // For text output, override the printed mnemonic
+    if (OutStreamer->hasRawTextSupport() && TargetMO && CC < 16 && CC > 0) {
+      MCSymbol *Sym = TargetMO->getMBB()->getSymbol();
+      OutStreamer->emitRawText(
+          Twine("\tb.") + CCNames[CC] + "\t" + Sym->getName());
+      return;
+    }
+    EmitToStreamer(*OutStreamer, TmpInst);
+    return;
+  }
+
   MCInst TmpInst;
   MCInstLowering.Lower(MI, TmpInst);
   EmitToStreamer(*OutStreamer, TmpInst);

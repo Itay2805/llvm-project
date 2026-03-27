@@ -125,8 +125,63 @@ void ARC4DAGToDAGISel::Select(SDNode *N) {
     }
     return;
   }
+  case ISD::SHL:
+  case ISD::SRL:
+  case ISD::SRA: {
+    // For constant shift amounts, expand to repeated shift-by-1 or ADD.
+    // For variable shifts, emit a library call.
+    SDLoc DL(N);
+    SDValue Src = N->getOperand(0);
+    auto *ShAmtC = dyn_cast<ConstantSDNode>(N->getOperand(1));
+    if (!ShAmtC)
+      break; // Variable shift — let SelectCode try (will fail gracefully)
+
+    unsigned Amt = ShAmtC->getZExtValue() & 31;
+    if (Amt == 0) {
+      ReplaceNode(N, Src.getNode());
+      return;
+    }
+
+    // Expand: repeated shift-by-1 for small amounts, or use ADD for SHL
+    SDValue Result = Src;
+    for (unsigned I = 0; I < Amt; I++) {
+      if (N->getOpcode() == ISD::SHL) {
+        // SHL by 1 = ADD a, a
+        Result = SDValue(CurDAG->getMachineNode(ARC4::CG_ADDrr, DL, MVT::i32,
+                                                 Result, Result), 0);
+      } else if (N->getOpcode() == ISD::SRA) {
+        // ASR by 1 (arithmetic shift right)
+        Result = SDValue(CurDAG->getMachineNode(ARC4::CG_ASR, DL, MVT::i32,
+                                                 Result), 0);
+      } else {
+        // LSR by 1 (logical shift right)
+        Result = SDValue(CurDAG->getMachineNode(ARC4::CG_LSR, DL, MVT::i32,
+                                                 Result), 0);
+      }
+    }
+    ReplaceNode(N, Result.getNode());
+    return;
+  }
   default:
     break;
+  }
+
+  // Handle ARC4ISD nodes that tablegen can't match
+  if (N->getOpcode() == ARC4ISD::BR_CC) {
+    // BR_CC: chain, target, cc, glue → CG_BRcc target, cc
+    SDLoc DL(N);
+    SDValue Target = N->getOperand(1);
+    // CC must be a TargetConstant (immediate), not a regular Constant
+    // (which would get register-allocated)
+    unsigned CCVal = cast<ConstantSDNode>(N->getOperand(2))->getZExtValue();
+    SDValue CC = CurDAG->getTargetConstant(CCVal, DL, MVT::i32);
+    SDValue Chain = N->getOperand(0);
+    SDValue Glue = N->getOperand(3);
+    SDValue Ops[] = {Target, CC, Chain, Glue};
+    auto *BrNode = CurDAG->getMachineNode(ARC4::CG_BRcc, DL, MVT::Other,
+                                           MVT::Glue, Ops);
+    ReplaceNode(N, BrNode);
+    return;
   }
 
   SelectCode(N);

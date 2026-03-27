@@ -3516,7 +3516,7 @@ def WasmSystemLibrary
 // TODO: Should make every target explicit.
 def isDefaultLibcallArch : RuntimeLibcallPredicate<[{
   TT.isMIPS() || TT.isLoongArch() || TT.isVE() || TT.isBPF() ||
-  TT.getArch() == Triple::csky || TT.getArch() == Triple::arc ||
+  TT.getArch() == Triple::csky || TT.getArch() == Triple::arc || TT.getArch() == Triple::arc4 ||
   TT.getArch() == Triple::m68k ||  TT.getArch() == Triple::xtensa ||
   (TT.isSystemZ() && !TT.isOSzOS())
 }]>;

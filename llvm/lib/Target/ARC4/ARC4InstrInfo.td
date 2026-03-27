@@ -369,7 +369,8 @@ def CallSeqEnd   : SDNode<"ISD::CALLSEQ_END", SDT_ARC4CallSeqEnd,
 def SDT_ARC4Call : SDTypeProfile<0, -1, [SDTCisVT<0, iPTR>]>;
 def SDT_ARC4Ret  : SDTypeProfile<0, -1, []>;
 def SDT_ARC4Cmp  : SDTypeProfile<0, 2, [SDTCisSameAs<0, 1>]>;
-def SDT_ARC4BrCC : SDTypeProfile<0, 3, []>;
+def SDT_ARC4BrCC : SDTypeProfile<0, -1, []>;
+def SDT_ARC4SelectCC : SDTypeProfile<1, 3, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>]>;
 
 def ARC4call    : SDNode<"ARC4ISD::CALL", SDT_ARC4Call,
                          [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
@@ -378,6 +379,8 @@ def ARC4retglue : SDNode<"ARC4ISD::RET_GLUE", SDT_ARC4Ret,
 def ARC4cmp     : SDNode<"ARC4ISD::CMP", SDT_ARC4Cmp, [SDNPOutGlue]>;
 def ARC4brcc    : SDNode<"ARC4ISD::BR_CC", SDT_ARC4BrCC,
                          [SDNPHasChain, SDNPInGlue]>;
+def ARC4selectcc : SDNode<"ARC4ISD::SELECT_CC", SDT_ARC4SelectCC,
+                          [SDNPInGlue]>;
 
 //===----------------------------------------------------------------------===//
 // Codegen-only instructions
@@ -506,6 +509,28 @@ def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i32imm:$amt, i32imm:$amt2),
 def ADJCALLSTACKUP   : Pseudo<(outs), (ins i32imm:$amt, i32imm:$amt2),
     "# ADJCALLSTACKUP $amt",
     [(CallSeqEnd timm:$amt, timm:$amt2)]>;
+}
+
+// --- SELECT_CC pseudo: expanded to a conditional branch diamond ---
+// Operands: dst, trueVal, falseVal, condCode
+// Uses glue (flags from CMP). Expanded by EmitInstrWithCustomInserter.
+def CG_SELECT_CC : Pseudo<(outs GR:$dst),
+    (ins GR:$truev, GR:$falsev, i32imm:$cc),
+    "# SELECT_CC $dst, $truev, $falsev, $cc",
+    [(set GR:$dst, (ARC4selectcc GR:$truev, GR:$falsev, (i32 imm:$cc)))]> {
+  let usesCustomInserter = 1;
+}
+
+// --- Shift-by-1 codegen instructions ---
+// ASR_cg: arithmetic shift right by 1
+def CG_ASR : ARC4RegFmt<0x03, (outs GR:$dst), (ins GR:$src),
+    "asr\t$dst, $src", []> {
+  let TSFlags{11-7} = 1; // ASR sub-opcode
+}
+// LSR_cg: logical shift right by 1
+def CG_LSR : ARC4RegFmt<0x03, (outs GR:$dst), (ins GR:$src),
+    "lsr\t$dst, $src", []> {
+  let TSFlags{11-7} = 2; // LSR sub-opcode
 }
 
 } // isCodeGenOnly = 1
