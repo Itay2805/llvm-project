@@ -10,6 +10,7 @@ include "llvm/Target/Target.td"
 
 include "ARC4RegisterInfo.td"
 include "ARC4InstrInfo.td"
+include "ARC4CallingConv.td"
 
 def ARC4InstrInfo : InstrInfo;
 

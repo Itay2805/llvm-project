@@ -507,6 +507,9 @@ createAMDGPUTargetCodeGenInfo(CodeGenModule &CGM);
 std::unique_ptr<TargetCodeGenInfo>
 createARCTargetCodeGenInfo(CodeGenModule &CGM);
 
+std::unique_ptr<TargetCodeGenInfo>
+createARC4TargetCodeGenInfo(CodeGenModule &CGM);
+
 enum class ARMABIKind {
   APCS = 0,
   AAPCS = 1,

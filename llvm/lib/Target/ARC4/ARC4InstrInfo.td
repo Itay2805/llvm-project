@@ -354,3 +354,158 @@ def JL_l : ARC4LimmFmt<0x07,
 def NOP : ARC4ShimmFmt<0x0F, (outs), (ins), "nop"> {
   let TSFlags{16} = 1; // isNOP flag for emitter
 }
+
+//===----------------------------------------------------------------------===//
+// Target-specific SDNodes for codegen
+//===----------------------------------------------------------------------===//
+
+def SDT_ARC4CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+def SDT_ARC4CallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+def CallSeqStart : SDNode<"ISD::CALLSEQ_START", SDT_ARC4CallSeqStart,
+                           [SDNPHasChain, SDNPOutGlue]>;
+def CallSeqEnd   : SDNode<"ISD::CALLSEQ_END", SDT_ARC4CallSeqEnd,
+                           [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+
+def SDT_ARC4Call : SDTypeProfile<0, -1, [SDTCisVT<0, iPTR>]>;
+def SDT_ARC4Ret  : SDTypeProfile<0, -1, []>;
+def SDT_ARC4Cmp  : SDTypeProfile<0, 2, [SDTCisSameAs<0, 1>]>;
+def SDT_ARC4BrCC : SDTypeProfile<0, 3, []>;
+
+def ARC4call    : SDNode<"ARC4ISD::CALL", SDT_ARC4Call,
+                         [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+def ARC4retglue : SDNode<"ARC4ISD::RET_GLUE", SDT_ARC4Ret,
+                         [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
+def ARC4cmp     : SDNode<"ARC4ISD::CMP", SDT_ARC4Cmp, [SDNPOutGlue]>;
+def ARC4brcc    : SDNode<"ARC4ISD::BR_CC", SDT_ARC4BrCC,
+                         [SDNPHasChain, SDNPInGlue]>;
+
+//===----------------------------------------------------------------------===//
+// Codegen-only instructions
+// These have clean operand lists for DAG pattern matching.
+// MCInstLower translates them to the MC-layer forms (appending F/NN/Q=0).
+//===----------------------------------------------------------------------===//
+
+let isCodeGenOnly = 1 in {
+
+// --- ALU register-register ---
+class CG_ALU_rr<bits<5> Opc, string mn, SDPatternOperator op>
+    : ARC4RegFmt<Opc, (outs GR:$dst), (ins GR:$src1, GR:$src2),
+      mn#"\t$dst, $src1, $src2",
+      [(set GR:$dst, (op GR:$src1, GR:$src2))]>;
+
+def CG_ADDrr : CG_ALU_rr<0x08, "add", add>;
+def CG_SUBrr : CG_ALU_rr<0x0A, "sub", sub>;
+def CG_ANDrr : CG_ALU_rr<0x0C, "and", and>;
+def CG_ORrr  : CG_ALU_rr<0x0D, "or",  or>;
+def CG_XORrr : CG_ALU_rr<0x0F, "xor", xor>;
+
+// --- ALU register-immediate (shimm, 9-bit signed) ---
+class CG_ALU_ri<bits<5> Opc, string mn, SDPatternOperator op>
+    : ARC4ShimmFmt<Opc, (outs GR:$dst), (ins GR:$src1, simm9:$imm),
+      mn#"\t$dst, $src1, $imm",
+      [(set GR:$dst, (op GR:$src1, (i32 imm:$imm)))]>;
+
+def CG_ADDri : CG_ALU_ri<0x08, "add", add>;
+def CG_SUBri : CG_ALU_ri<0x0A, "sub", sub>;
+def CG_ANDri : CG_ALU_ri<0x0C, "and", and>;
+def CG_ORri  : CG_ALU_ri<0x0D, "or",  or>;
+
+// --- MOV register (copy via AND dst, src, src) ---
+// Per spec page 108: MOV is the AND instruction
+def CG_MOVrr : ARC4RegFmt<0x0C, (outs GR:$dst), (ins GR:$src),
+    "mov\t$dst, $src", []>;
+
+// --- MOV shimm (AND dst, shimm, shimm - shimms match) ---
+// Per spec: MOV a,shimm encodes as AND with B=C=shimm_sentinel, D=value
+def CG_MOVri : ARC4ShimmFmt<0x0C, (outs GR:$dst), (ins simm9:$imm),
+    "mov\t$dst, $imm", []>;
+
+// --- MOV limm (AND dst, limm - 32-bit constant) ---
+def CG_MOVli : ARC4LimmFmt<0x0C, (outs GR:$dst), (ins imm32:$imm),
+    "mov\t$dst, $imm", []>;
+
+// --- Load word (32-bit) from [base + offset] ---
+def CG_LDri : ARC4ShimmFmt<0x01, (outs GR:$dst), (ins GR:$base, simm9:$off),
+    "ld\t$dst, [$base, $off]",
+    [(set GR:$dst, (load (add GR:$base, (i32 imm:$off))))]> {
+  let TSFlags{13-12} = 0b00;
+  let TSFlags{14} = 0;
+  let mayLoad = 1;
+}
+
+// --- Load word from [base + reg] ---
+def CG_LDrr : ARC4RegFmt<0x00, (outs GR:$dst), (ins GR:$base, GR:$off),
+    "ld\t$dst, [$base, $off]",
+    [(set GR:$dst, (load (add GR:$base, GR:$off)))]> {
+  let mayLoad = 1;
+}
+
+// --- Store word to [base + offset] ---
+def CG_STri : ARC4ShimmFmt<0x02, (outs), (ins GR:$src, GR:$base, simm9:$off),
+    "st\t$src, [$base, $off]",
+    [(store GR:$src, (add GR:$base, (i32 imm:$off)))]> {
+  let mayStore = 1;
+}
+
+// --- Compare (SUB with dest=discard, sets flags) ---
+def CG_CMPrr : ARC4RegFmt<0x0A, (outs), (ins GR:$src1, GR:$src2),
+    "sub.f\t0, $src1, $src2",
+    [(ARC4cmp GR:$src1, GR:$src2)]> {
+  let Defs = []; // flags are implicit
+}
+
+def CG_CMPri : ARC4ShimmFmt<0x0A, (outs), (ins GR:$src1, simm9:$imm),
+    "sub.f\t0, $src1, $imm", []> {
+  let Defs = [];
+}
+
+// --- Conditional branch ---
+def CG_BRcc : ARC4BranchFmt<0x04, (outs), (ins imm32:$target, imm1:$cc),
+    "b\t$target", []> {
+  let isBranch = 1;
+  let isTerminator = 1;
+}
+
+// --- Unconditional branch ---
+def CG_BR : ARC4BranchFmt<0x04, (outs), (ins imm32:$target),
+    "b\t$target", []> {
+  let isBranch = 1;
+  let isTerminator = 1;
+  let isBarrier = 1;
+}
+
+// --- Return (expands to j [blink]) ---
+def CG_RET : ARC4Inst<0x07, {0, 0}, (outs), (ins), "j\t[r31]",
+    [(ARC4retglue)]> {
+  let isReturn = 1;
+  let isTerminator = 1;
+  let isBarrier = 1;
+}
+
+// --- Call register ---
+def CG_CALLr : ARC4RegFmt<0x07, (outs), (ins GR:$target),
+    "jl\t[$target]", [(ARC4call GR:$target)]> {
+  let isCall = 1;
+  let TSFlags{12} = 1; // isJL
+  let Defs = [R0, R1, R2, R3, R4, R5, R6, R7, R31];
+}
+
+// --- Call immediate (limm) ---
+def CG_CALLi : ARC4LimmFmt<0x07, (outs), (ins imm32:$target),
+    "jl\t[$target]", []> {
+  let isCall = 1;
+  let TSFlags{12} = 1;
+  let Defs = [R0, R1, R2, R3, R4, R5, R6, R7, R31];
+}
+
+// --- Call frame pseudo-instructions ---
+let Defs = [R28], Uses = [R28] in {
+def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i32imm:$amt, i32imm:$amt2),
+    "# ADJCALLSTACKDOWN $amt",
+    [(CallSeqStart timm:$amt, timm:$amt2)]>;
+def ADJCALLSTACKUP   : Pseudo<(outs), (ins i32imm:$amt, i32imm:$amt2),
+    "# ADJCALLSTACKUP $amt",
+    [(CallSeqEnd timm:$amt, timm:$amt2)]>;
+}
+
+} // isCodeGenOnly = 1

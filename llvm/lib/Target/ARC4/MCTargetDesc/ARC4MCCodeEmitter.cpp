@@ -104,7 +104,30 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
                                            SmallVectorImpl<char> &CB,
                                            SmallVectorImpl<MCFixup> &Fixups,
                                            const MCSubtargetInfo &STI) const {
-  const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
+  unsigned Opc = MI.getOpcode();
+
+  // Handle codegen-only MOV pseudo-instructions directly.
+  // These bypass the normal format dispatch since they need special encoding.
+  if (Opc == ARC4::CG_MOVri) {
+    // MOV dst, shimm → AND dst, shimm, shimm (shimms match)
+    // Encoding: I=0x0C(AND), A=dst, B=63(shimm-no-flag), C=63, D=value
+    uint32_t A = regEnc(MI.getOperand(0));
+    uint32_t D = (uint32_t)MI.getOperand(1).getImm() & 0x1FF;
+    uint32_t Word = (0x0Cu << 27) | (A << 21) | (63u << 15) | (63u << 9) | D;
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  if (Opc == ARC4::CG_MOVli) {
+    // MOV dst, limm → AND dst, limm (B=62, C=62)
+    // Encoding: I=0x0C(AND), A=dst, B=62, C=62, followed by 32-bit limm
+    uint32_t A = regEnc(MI.getOperand(0));
+    uint32_t Word = (0x0Cu << 27) | (A << 21) | (62u << 15) | (62u << 9);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    emitLimm(MI.getOperand(1), /*FixupOff=*/4, Fixups, CB);
+    return;
+  }
+
+  const MCInstrDesc &Desc = MCII.get(Opc);
   uint64_t TSF = Desc.TSFlags;
 
   uint32_t Arc4Op = TSF & 0x1F;         // 5-bit ARC4 instruction opcode

@@ -61,3 +61,10 @@ class ARC4LimmFmt<bits<5> Opc, dag OutOps, dag InOps, string AsmStr,
 class ARC4BranchFmt<bits<5> Opc, dag OutOps, dag InOps, string AsmStr,
                     list<dag> Pat = []>
     : ARC4Inst<Opc, {1, 1}, OutOps, InOps, AsmStr, Pat>;
+
+// Pseudo-instruction for codegen (no encoding, expanded later)
+class Pseudo<dag outs, dag ins, string asmstr, list<dag> pattern = []>
+    : ARC4Inst<0, {0, 0}, outs, ins, asmstr, pattern> {
+  let isCodeGenOnly = 1;
+  let isPseudo = 1;
+}

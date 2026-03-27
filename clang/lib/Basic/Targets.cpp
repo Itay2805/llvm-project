@@ -16,6 +16,7 @@
 #include "Targets/AArch64.h"
 #include "Targets/AMDGPU.h"
 #include "Targets/ARC.h"
+#include "Targets/ARC4.h"
 #include "Targets/ARM.h"
 #include "Targets/AVR.h"
 #include "Targets/BPF.h"
@@ -118,6 +119,9 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
 
   case llvm::Triple::arc:
     return std::make_unique<ARCTargetInfo>(Triple, Opts);
+
+  case llvm::Triple::arc4:
+    return std::make_unique<ARC4TargetInfo>(Triple, Opts);
 
   case llvm::Triple::xcore:
     return std::make_unique<XCoreTargetInfo>(Triple, Opts);

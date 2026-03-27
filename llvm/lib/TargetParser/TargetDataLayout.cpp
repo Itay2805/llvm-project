@@ -550,6 +550,7 @@ std::string Triple::computeDataLayout(StringRef ABIName) const {
   case Triple::aarch64_32:
     return computeAArch64DataLayout(*this);
   case Triple::arc:
+  case Triple::arc4:
     return "e-m:e-p:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32-"
            "f32:32:32-i64:32-f64:32-a:0:32-n32";
   case Triple::avr:
