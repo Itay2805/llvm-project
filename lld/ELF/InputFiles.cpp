@@ -1760,6 +1760,8 @@ static uint16_t getBitcodeMachineKind(Ctx &ctx, StringRef path,
   case Triple::thumb:
   case Triple::thumbeb:
     return EM_ARM;
+  case Triple::arc4:
+    return EM_ARC;
   case Triple::avr:
     return EM_AVR;
   case Triple::hexagon:

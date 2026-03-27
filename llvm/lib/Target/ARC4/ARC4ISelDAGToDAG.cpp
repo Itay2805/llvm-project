@@ -81,6 +81,16 @@ void ARC4DAGToDAGISel::Select(SDNode *N) {
     }
     break;
   }
+  case ISD::BR: {
+    // Unconditional branch: br bb → CG_BR target
+    SDLoc DL(N);
+    SDValue Target = N->getOperand(1);
+    SDValue Chain = N->getOperand(0);
+    auto *MN = CurDAG->getMachineNode(ARC4::CG_BR, DL, MVT::Other,
+                                       Target, Chain);
+    ReplaceNode(N, MN);
+    return;
+  }
   case ISD::STORE: {
     auto *ST = cast<StoreSDNode>(N);
     if (ST->isTruncatingStore())
