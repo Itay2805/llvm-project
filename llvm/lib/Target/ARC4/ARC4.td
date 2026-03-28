@@ -9,6 +9,8 @@
 include "llvm/Target/Target.td"
 
 include "ARC4RegisterInfo.td"
+include "ARC4CallingConv.td"
+include "ARC4Nodes.td"
 include "ARC4InstrInfo.td"
 
 defm : RemapAllTargetPseudoPointerOperands<GPR32>;

@@ -9,12 +9,16 @@
 #ifndef LLVM_LIB_TARGET_ARC4_ARC4TARGETMACHINE_H
 #define LLVM_LIB_TARGET_ARC4_ARC4TARGETMACHINE_H
 
+#include "ARC4Subtarget.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include <optional>
 
 namespace llvm {
 
 class ARC4TargetMachine : public CodeGenTargetMachineImpl {
+  std::unique_ptr<TargetLoweringObjectFile> TLOF;
+  ARC4Subtarget Subtarget;
+
 public:
   ARC4TargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                     StringRef FS, const TargetOptions &Options,
@@ -23,11 +27,19 @@ public:
                     CodeGenOptLevel OL, bool JIT);
   ~ARC4TargetMachine() override;
 
-  const TargetSubtargetInfo *getSubtargetImpl(const Function &) const override {
-    return nullptr; // No codegen support yet
+  const ARC4Subtarget *getSubtargetImpl(const Function &) const override {
+    return &Subtarget;
   }
 
   TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
+
+  TargetLoweringObjectFile *getObjFileLowering() const override {
+    return TLOF.get();
+  }
+
+  MachineFunctionInfo *
+  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
+                            const TargetSubtargetInfo *STI) const override;
 };
 
 } // namespace llvm

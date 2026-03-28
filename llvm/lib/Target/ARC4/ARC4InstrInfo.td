@@ -554,3 +554,22 @@ def : InstAlias<"or\t0, $shimm",  (OR_0ss  simm9:$shimm, 0), 0>;
 def : InstAlias<"bic\t0, $shimm", (BIC_0ss simm9:$shimm, 0), 0>;
 def : InstAlias<"xor\t0, $shimm", (XOR_0ss simm9:$shimm, 0), 0>;
 
+//===----------------------------------------------------------------------===//
+// Return instruction  — j [blink]
+//
+// A real instruction (not pseudo) using ARC4InstJumpReg with b=BLINK(31),
+// link=0. The DAG pattern matches ARC4ISD::RET.
+//===----------------------------------------------------------------------===//
+
+let isReturn = 1, isTerminator = 1, isBarrier = 1,
+    hasCtrlDep = 1, Uses = [BLINK] in
+def RET : ARC4InstJumpReg<0,
+  (outs), (ins),
+  "j\t[blink]",
+  [(ARC4ret)]> {
+  let b = 31; // BLINK register encoding
+  let f = 0;
+  let q = 0;
+  let n = 0;
+}
+
