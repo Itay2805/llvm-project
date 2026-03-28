@@ -293,61 +293,52 @@ let isCall = 1 in {
 
 multiclass LoadAll<string mnemonic, bits<2> size> {
   let mayLoad = 1, hasSideEffects = 0 in {
-    // --- Opcode 0: ld a, [b, c] ---
+    // --- Opcode 0: ld a, [b, c] --- (supports .x, .a, .di)
     def _rr : ARC4InstLD0_rr<
-      (outs GPR32:$a), (ins GPR32:$b, GPR32:$c),
+      (outs GPR32:$a), (ins GPR32:$b, GPR32:$c,
+                         i32imm:$x, i32imm:$w, i32imm:$e),
       mnemonic # "\t$a, [$b, $c]", []> {
-      let e = 0;
-      let w = 0;
       let z = size;
-      let x = 0;
     }
 
-    // --- Opcode 0: ld a, [b, limm] ---
+    // --- Opcode 0: ld a, [b, limm] --- (supports .x, .a, .di)
     def _rl : ARC4InstLD0_rl<
-      (outs GPR32:$a), (ins GPR32:$b, limm32:$limm),
+      (outs GPR32:$a), (ins GPR32:$b, limm32:$limm,
+                         i32imm:$x, i32imm:$w, i32imm:$e),
       mnemonic # "\t$a, [$b, $limm]", []> {
-      let e = 0;
-      let w = 0;
       let z = size;
-      let x = 0;
     }
 
-    // --- Opcode 0: ld a, [limm, c] ---
+    // --- Opcode 0: ld a, [limm, c] --- (supports .x, .di; NO .a)
     def _lr : ARC4InstLD0_lr<
-      (outs GPR32:$a), (ins limm32:$limm, GPR32:$c),
+      (outs GPR32:$a), (ins limm32:$limm, GPR32:$c,
+                         i32imm:$x, i32imm:$e),
       mnemonic # "\t$a, [$limm, $c]", []> {
-      let e = 0;
       let z = size;
-      let x = 0;
     }
 
-    // --- Opcode 1: ld a, [b, shimm] ---
+    // --- Opcode 1: ld a, [b, shimm] --- (supports .x, .a, .di)
     def _rs : ARC4InstLD1_rs<
-      (outs GPR32:$a), (ins GPR32:$b, ld_offset9:$shimm),
+      (outs GPR32:$a), (ins GPR32:$b, ld_offset9:$shimm,
+                         i32imm:$X, i32imm:$W, i32imm:$E),
       mnemonic # "\t$a, [$b, $shimm]", []> {
-      let E = 0;
-      let W = 0;
       let Z = size;
-      let X = 0;
     }
 
-    // --- Opcode 1: ld a, [shimm, shimm] (effective addr = 2*shimm) ---
+    // --- Opcode 1: ld a, [shimm, shimm] --- (supports .x, .di; NO .a)
     def _ss : ARC4InstLD1_ss<
-      (outs GPR32:$a), (ins ld_ss_addr:$shimm),
+      (outs GPR32:$a), (ins ld_ss_addr:$shimm,
+                         i32imm:$X, i32imm:$E),
       mnemonic # "\t$a, [$shimm]", []> {
-      let E = 0;
       let Z = size;
-      let X = 0;
     }
 
-    // --- Opcode 1: ld a, [limm] ---
+    // --- Opcode 1: ld a, [limm] --- (supports .x, .di; NO .a)
     def _l : ARC4InstLD1_l<
-      (outs GPR32:$a), (ins limm32:$limm),
+      (outs GPR32:$a), (ins limm32:$limm,
+                         i32imm:$X, i32imm:$E),
       mnemonic # "\t$a, [$limm]", []> {
-      let E = 0;
       let Z = size;
-      let X = 0;
     }
   }
 }
@@ -371,62 +362,67 @@ defm LDW : LoadAll<"ldw", 0b10>;  // halfword
 
 multiclass StoreAll<string mnemonic, bits<2> size> {
   let mayStore = 1, hasSideEffects = 0 in {
+    // --- st c, [b, offset] --- (supports .a, .di)
     def _rrs : ARC4InstST_rrs<
-      (outs), (ins GPR32:$c, GPR32:$b, st_offset9:$offset),
+      (outs), (ins GPR32:$c, GPR32:$b, st_offset9:$offset,
+                   i32imm:$v, i32imm:$D),
       mnemonic # "\t$c, [$b, $offset]", []> {
-      let D = 0;
-      let v = 0;
       let y = size;
     }
 
+    // --- st shimm, [b, offset] --- (supports .a, .di)
     def _srs : ARC4InstST_srs<
-      (outs), (ins simm9:$offset, GPR32:$b),
+      (outs), (ins simm9:$offset, GPR32:$b,
+                   i32imm:$v, i32imm:$D),
       mnemonic # "\t$offset, [$b, $offset]", []> {
-      let D = 0;
-      let v = 0;
       let y = size;
     }
 
+    // --- st c, [shimm] --- (supports .di; NO .a)
     def _rss : ARC4InstST_rss<
-      (outs), (ins GPR32:$c, st_offset9:$offset),
+      (outs), (ins GPR32:$c, st_offset9:$offset,
+                   i32imm:$D),
       mnemonic # "\t$c, [$offset]", []> {
-      let D = 0;
       let y = size;
     }
 
+    // --- st shimm, [shimm] --- (supports .di; NO .a)
     def _sss : ARC4InstST_sss<
-      (outs), (ins st_offset9:$offset),
+      (outs), (ins st_offset9:$offset,
+                   i32imm:$D),
       mnemonic # "\t$offset, [$offset]", []> {
-      let D = 0;
       let y = size;
     }
 
+    // --- st c, [limm, offset] --- (supports .di; NO .a)
     def _rls : ARC4InstST_rls<
-      (outs), (ins GPR32:$c, limm32:$limm, st_offset9:$offset),
+      (outs), (ins GPR32:$c, limm32:$limm, st_offset9:$offset,
+                   i32imm:$D),
       mnemonic # "\t$c, [$limm, $offset]", []> {
-      let D = 0;
       let y = size;
     }
 
+    // --- st limm, [b, offset] --- (supports .a, .di)
     def _lrs : ARC4InstST_lrs<
-      (outs), (ins limm32:$limm, GPR32:$b, st_offset9:$offset),
+      (outs), (ins limm32:$limm, GPR32:$b, st_offset9:$offset,
+                   i32imm:$v, i32imm:$D),
       mnemonic # "\t$limm, [$b, $offset]", []> {
-      let D = 0;
-      let v = 0;
       let y = size;
     }
 
+    // --- st limm, [limm, offset] --- (supports .di; NO .a)
     def _lls : ARC4InstST_lls<
-      (outs), (ins limm32:$limm, st_offset9:$offset),
+      (outs), (ins limm32:$limm, st_offset9:$offset,
+                   i32imm:$D),
       mnemonic # "\t$limm, [$limm, $offset]", []> {
-      let D = 0;
       let y = size;
     }
 
+    // --- st shimm, [limm, offset] --- (supports .di; NO .a)
     def _sls : ARC4InstST_sls<
-      (outs), (ins limm32:$limm, st_offset9:$offset),
+      (outs), (ins limm32:$limm, st_offset9:$offset,
+                   i32imm:$D),
       mnemonic # "\t$offset, [$limm, $offset]", []> {
-      let D = 0;
       let y = size;
     }
   }
@@ -513,21 +509,24 @@ def : InstAlias<"j\t[$b]", (J_r GPR32:$b, 0, 0, 0)>;
 def : InstAlias<"jl\t[$b]", (JL_r GPR32:$b, 0, 0, 0)>;
 
 // ld a, [b] => ld a, [b, 0]  — single-register load with implicit 0 offset
-def : InstAlias<"ld\t$a, [$b]", (LD_rs GPR32:$a, GPR32:$b, 0)>;
-def : InstAlias<"ldb\t$a, [$b]", (LDB_rs GPR32:$a, GPR32:$b, 0)>;
-def : InstAlias<"ldw\t$a, [$b]", (LDW_rs GPR32:$a, GPR32:$b, 0)>;
+// Suffix operands (X, W, E) default to 0.
+def : InstAlias<"ld\t$a, [$b]", (LD_rs GPR32:$a, GPR32:$b, 0, 0, 0, 0)>;
+def : InstAlias<"ldb\t$a, [$b]", (LDB_rs GPR32:$a, GPR32:$b, 0, 0, 0, 0)>;
+def : InstAlias<"ldw\t$a, [$b]", (LDW_rs GPR32:$a, GPR32:$b, 0, 0, 0, 0)>;
 
 
 // st c, [b] => st c, [b, 0]  — single-register store with implicit 0 offset
-def : InstAlias<"st\t$c, [$b]", (ST_rrs GPR32:$c, GPR32:$b, 0)>;
-def : InstAlias<"stb\t$c, [$b]", (STB_rrs GPR32:$c, GPR32:$b, 0)>;
-def : InstAlias<"stw\t$c, [$b]", (STW_rrs GPR32:$c, GPR32:$b, 0)>;
+// Suffix operands (v, D) default to 0.
+def : InstAlias<"st\t$c, [$b]", (ST_rrs GPR32:$c, GPR32:$b, 0, 0, 0)>;
+def : InstAlias<"stb\t$c, [$b]", (STB_rrs GPR32:$c, GPR32:$b, 0, 0, 0)>;
+def : InstAlias<"stw\t$c, [$b]", (STW_rrs GPR32:$c, GPR32:$b, 0, 0, 0)>;
 
 // st c, [limm] => st c, [limm, 0]  — store reg to absolute address
 // Priority 0: must not shadow the register alias above.
-def : InstAlias<"st\t$c, [$addr]", (ST_rls GPR32:$c, limm32:$addr, 0), 0>;
-def : InstAlias<"stb\t$c, [$addr]", (STB_rls GPR32:$c, limm32:$addr, 0), 0>;
-def : InstAlias<"stw\t$c, [$addr]", (STW_rls GPR32:$c, limm32:$addr, 0), 0>;
+// Suffix operand (D) default to 0.
+def : InstAlias<"st\t$c, [$addr]", (ST_rls GPR32:$c, limm32:$addr, 0, 0), 0>;
+def : InstAlias<"stb\t$c, [$addr]", (STB_rls GPR32:$c, limm32:$addr, 0, 0), 0>;
+def : InstAlias<"stw\t$c, [$addr]", (STW_rls GPR32:$c, limm32:$addr, 0, 0), 0>;
 
 // Hidden rss aliases: 2-operand form (after parser collapses duplicate imms).
 // These exist because the AsmMatcher can't parse "$shimm, $shimm" (tied operand

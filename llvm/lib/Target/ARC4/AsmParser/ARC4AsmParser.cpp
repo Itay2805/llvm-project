@@ -131,6 +131,9 @@ class ARC4AsmParser : public MCTargetAsmParser {
   int ParsedCondCode = 0;     // 5-bit condition code (0 = always)
   int ParsedFlagBit = 0;      // 1 = .f suffix present
   int ParsedDelaySlot = 0;    // 0=nd, 1=d, 2=jd
+  int ParsedSignExtend = 0;   // 1 = .x suffix present (loads only)
+  int ParsedWriteback = 0;    // 1 = .a suffix present (address writeback)
+  int ParsedCacheBypass = 0;  // 1 = .di suffix present (cache bypass)
   bool ParsedHasExplicitSuffix = false;  // true if any dot-suffix was parsed
 
 #define GET_ASSEMBLER_HEADER
@@ -316,6 +319,9 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
   ParsedCondCode = 0;
   ParsedFlagBit = 0;
   ParsedDelaySlot = 0;
+  ParsedSignExtend = 0;
+  ParsedWriteback = 0;
+  ParsedCacheBypass = 0;
   ParsedHasExplicitSuffix = false;
 
   // Process dot-separated suffixes from left to right.
@@ -347,9 +353,10 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     if (Suffix == "d")  { ParsedDelaySlot = 1; ParsedHasExplicitSuffix = true; continue; }
     if (Suffix == "jd") { ParsedDelaySlot = 2; ParsedHasExplicitSuffix = true; continue; }
 
-    // Sign extend, writeback, cache bypass - strip for now.
-    if (Suffix == "x" || Suffix == "a" || Suffix == "di")
-      continue;
+    // Sign extend (.x), writeback (.a), cache bypass (.di).
+    if (Suffix == "x")  { ParsedSignExtend = 1;  ParsedHasExplicitSuffix = true; continue; }
+    if (Suffix == "a")  { ParsedWriteback = 1;   ParsedHasExplicitSuffix = true; continue; }
+    if (Suffix == "di") { ParsedCacheBypass = 1;  ParsedHasExplicitSuffix = true; continue; }
 
     // Condition codes.
     int CC = mapConditionCode(Suffix);
@@ -639,11 +646,13 @@ static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
       if (CEVal && CEOff && CEVal->getValue() == CEOff->getValue()) {
         int64_t Val = CEVal->getValue();
         if (Val >= -256 && Val <= 255) {
-          // Build ST_srs: (ins simm9:$offset, GPR32:$b)
+          // Build ST_srs: (ins simm9:$offset, GPR32:$b, i32imm:$v, i32imm:$D)
           Inst.clear();
           Inst.setOpcode(SRSOpc);
           Inst.addOperand(MCOperand::createImm(Val));    // offset (= val)
           Inst.addOperand(MCOperand::createReg(O3->getReg())); // base
+          Inst.addOperand(MCOperand::createImm(0));      // v (writeback)
+          Inst.addOperand(MCOperand::createImm(0));      // D (cache bypass)
           return true;
         }
       }
@@ -667,29 +676,35 @@ static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
             int64_t Addr = CEAddr->getValue();
             if (Val == Addr) {
               // Pattern sss: val == addr, both shimm.
+              // ST_sss: (ins st_offset9:$offset, i32imm:$D)
               Inst.clear();
               Inst.setOpcode(SSSOpc);
               Inst.addOperand(MCOperand::createImm(Val));
+              Inst.addOperand(MCOperand::createImm(0));  // D (cache bypass)
               return true;
             }
             // Pattern sls (constant addr): shimm value, limm address.
             // limm_encoded = addr - shimm.
+            // ST_sls: (ins limm32:$limm, st_offset9:$offset, i32imm:$D)
             Inst.clear();
             Inst.setOpcode(SLSOpc);
             Inst.addOperand(MCOperand::createImm(Addr - Val));
             Inst.addOperand(MCOperand::createImm(Val));
+            Inst.addOperand(MCOperand::createImm(0));  // D (cache bypass)
             return true;
           }
           // Pattern sls (symbol addr): st shimm, [label]
           // Encode as st shimm, [label - shimm, shimm].
           // Create MCExpr: label - Val, so the linker resolves
           // limm = label - Val, and effective address = limm + Val = label.
+          // ST_sls: (ins limm32:$limm, st_offset9:$offset, i32imm:$D)
           const MCExpr *AdjAddr = MCBinaryExpr::createSub(
               O3->Expr, MCConstantExpr::create(Val, Ctx), Ctx);
           Inst.clear();
           Inst.setOpcode(SLSOpc);
           Inst.addOperand(MCOperand::createExpr(AdjAddr));
           Inst.addOperand(MCOperand::createImm(Val));
+          Inst.addOperand(MCOperand::createImm(0));  // D (cache bypass)
           return true;
         }
       }
@@ -697,6 +712,105 @@ static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
   }
 
   return false;
+}
+
+/// Returns true if the instruction is a load with all 3 modifier operands
+/// (x, w/W, e/E): sign-extend, writeback, and cache bypass.
+/// These are forms with a register base where writeback is valid.
+static bool isLoadWithWriteback(unsigned Opc) {
+  switch (Opc) {
+  // LD0_rr, LD0_rl: reg base, all 3 modifiers (x, w, e)
+  case ARC4::LD_rr:  case ARC4::LD_rl:
+  case ARC4::LDB_rr: case ARC4::LDB_rl:
+  case ARC4::LDW_rr: case ARC4::LDW_rl:
+  // LD1_rs: reg base, all 3 modifiers (X, W, E)
+  case ARC4::LD_rs:
+  case ARC4::LDB_rs:
+  case ARC4::LDW_rs:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Returns true if the instruction is a load with only sign-extend and cache
+/// bypass operands (no writeback): limm base or shimm+shimm forms.
+static bool isLoadNoWriteback(unsigned Opc) {
+  switch (Opc) {
+  // LD0_lr: limm base, 2 modifiers (x, e)
+  case ARC4::LD_lr:  case ARC4::LDB_lr: case ARC4::LDW_lr:
+  // LD1_ss, LD1_l: shimm/limm base, 2 modifiers (X, E)
+  case ARC4::LD_ss:  case ARC4::LDB_ss: case ARC4::LDW_ss:
+  case ARC4::LD_l:   case ARC4::LDB_l:  case ARC4::LDW_l:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Returns true if the instruction is a store with writeback + cache bypass
+/// operands (v, D): forms with register base.
+static bool isStoreWithWriteback(unsigned Opc) {
+  switch (Opc) {
+  case ARC4::ST_rrs:  case ARC4::ST_srs:  case ARC4::ST_lrs:
+  case ARC4::STB_rrs: case ARC4::STB_srs: case ARC4::STB_lrs:
+  case ARC4::STW_rrs: case ARC4::STW_srs: case ARC4::STW_lrs:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Returns true if the instruction is a store with only cache bypass operand
+/// (D): forms without register base (shimm/limm base).
+static bool isStoreNoWriteback(unsigned Opc) {
+  switch (Opc) {
+  case ARC4::ST_rss:  case ARC4::ST_sss:  case ARC4::ST_rls:
+  case ARC4::ST_lls:  case ARC4::ST_sls:
+  case ARC4::STB_rss: case ARC4::STB_sss: case ARC4::STB_rls:
+  case ARC4::STB_lls: case ARC4::STB_sls:
+  case ARC4::STW_rss: case ARC4::STW_sss: case ARC4::STW_rls:
+  case ARC4::STW_lls: case ARC4::STW_sls:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Set the load/store modifier suffix operands in the MCInst.
+/// These are real instruction operands that are not in the AsmString.
+/// The matcher's ConvertToMCInst fills them with default 0 values.
+/// We overwrite them with the parsed suffix values.
+///
+/// Load with writeback: last 3 operands = x/X, w/W, e/E
+/// Load without writeback: last 2 operands = x/X, e/E
+/// Store with writeback: last 2 operands = v, D
+/// Store without writeback: last 1 operand = D
+static void setLoadStoreModifiers(MCInst &Inst, int SignExtend, int Writeback,
+                                  int CacheBypass) {
+  unsigned Opc = Inst.getOpcode();
+  unsigned N = Inst.getNumOperands();
+
+  if (isLoadWithWriteback(Opc) && N >= 3) {
+    Inst.getOperand(N - 3).setImm(SignExtend);
+    Inst.getOperand(N - 2).setImm(Writeback);
+    Inst.getOperand(N - 1).setImm(CacheBypass);
+    return;
+  }
+  if (isLoadNoWriteback(Opc) && N >= 2) {
+    Inst.getOperand(N - 2).setImm(SignExtend);
+    Inst.getOperand(N - 1).setImm(CacheBypass);
+    return;
+  }
+  if (isStoreWithWriteback(Opc) && N >= 2) {
+    Inst.getOperand(N - 2).setImm(Writeback);
+    Inst.getOperand(N - 1).setImm(CacheBypass);
+    return;
+  }
+  if (isStoreNoWriteback(Opc) && N >= 1) {
+    Inst.getOperand(N - 1).setImm(CacheBypass);
+    return;
+  }
 }
 
 /// Set the suffix operands (f, q, n) in the MCInst. These are real instruction
@@ -750,28 +864,16 @@ static void setSuffixOperands(MCInst &Inst, const MCInstrInfo &MCII,
     break;
   }
 
-  // Instructions with NO suffix operands: loads, stores, NOP, BRK, SLEEP, SWI.
+  // Instructions with NO f/q/n suffix operands: loads, stores, NOP, BRK, etc.
+  // Loads/stores have their OWN modifier operands (x/w/e, v/D) which are
+  // handled separately by setLoadStoreModifiers.
   // Must check these BEFORE the shimm form check, since loads/stores also use
   // shimm but don't have an f operand.
+  if (isLoadWithWriteback(Opc) || isLoadNoWriteback(Opc) ||
+      isStoreWithWriteback(Opc) || isStoreNoWriteback(Opc))
+    return;
   switch (Opc) {
   case ARC4::NOP: case ARC4::BRK: case ARC4::SLEEP: case ARC4::SWI:
-  // All load instructions (opcode 0 and 1)
-  case ARC4::LD_rr:  case ARC4::LD_rl:  case ARC4::LD_lr:
-  case ARC4::LD_rs:  case ARC4::LD_ss:  case ARC4::LD_l:
-  case ARC4::LDB_rr: case ARC4::LDB_rl: case ARC4::LDB_lr:
-  case ARC4::LDB_rs: case ARC4::LDB_ss: case ARC4::LDB_l:
-  case ARC4::LDW_rr: case ARC4::LDW_rl: case ARC4::LDW_lr:
-  case ARC4::LDW_rs: case ARC4::LDW_ss: case ARC4::LDW_l:
-  // All store instructions (opcode 2)
-  case ARC4::ST_rrs:  case ARC4::ST_srs:  case ARC4::ST_rss:
-  case ARC4::ST_sss:  case ARC4::ST_rls:  case ARC4::ST_lrs:
-  case ARC4::ST_lls:  case ARC4::ST_sls:
-  case ARC4::STB_rrs: case ARC4::STB_srs: case ARC4::STB_rss:
-  case ARC4::STB_sss: case ARC4::STB_rls: case ARC4::STB_lrs:
-  case ARC4::STB_lls: case ARC4::STB_sls:
-  case ARC4::STW_rrs: case ARC4::STW_srs: case ARC4::STW_rss:
-  case ARC4::STW_sss: case ARC4::STW_rls: case ARC4::STW_lrs:
-  case ARC4::STW_lls: case ARC4::STW_sls:
     return;  // No suffix operands
   default:
     break;
@@ -810,7 +912,7 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                              getContext());
 
   if (StoreShimmMatched) {
-    // Store shimm forms have no suffix operands (no f/q/n fields).
+    // Store shimm forms have no f/q/n suffix operands.
     // Validate: condition codes and delay slots are not allowed.
     if (ParsedCondCode != 0 && isShimmForm(Inst.getOpcode()))
       return Error(IDLoc,
@@ -818,6 +920,18 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     if (ParsedDelaySlot != 0)
       return Error(IDLoc,
                    "delay slot modifier not allowed on this instruction");
+    // .x (sign-extend) is not valid on stores.
+    if (ParsedSignExtend != 0)
+      return Error(IDLoc, "sign-extend (.x) not allowed on store instructions");
+    // .a (writeback) validation.
+    if (ParsedWriteback != 0) {
+      if (isStoreNoWriteback(Inst.getOpcode()))
+        return Error(IDLoc,
+                     "address writeback (.a) not allowed with non-register base");
+    }
+    // Fill in load/store modifier operands (v, D).
+    setLoadStoreModifiers(Inst, ParsedSignExtend, ParsedWriteback,
+                          ParsedCacheBypass);
     Out.emitInstruction(Inst, getSTI());
     return false;
   }
@@ -850,10 +964,15 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
           Inst.getOperand(1).setImm(Half);
         } else {
           // Redirect to LD_l (limm form) for odd or large addresses.
+          // LD_l has 2 modifier operands (X, E) vs LD_ss's 2 (X, E).
           MCInst NewInst;
           NewInst.setOpcode(LimmOpc);
           NewInst.addOperand(Inst.getOperand(0)); // dest register
           NewInst.addOperand(Inst.getOperand(1)); // address as limm
+          // Carry over modifier operands (X, E) — last 2 operands of LD_ss.
+          unsigned SsN = Inst.getNumOperands();
+          NewInst.addOperand(Inst.getOperand(SsN - 2)); // X
+          NewInst.addOperand(Inst.getOperand(SsN - 1)); // E
           Inst = NewInst;
         }
       }
@@ -866,11 +985,47 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       return Error(IDLoc,
                    "delay slot modifier not allowed on this instruction");
 
+    // Validate load/store modifier compatibility.
+    unsigned CurOpc = Inst.getOpcode();
+    bool IsAnyLoad = isLoadWithWriteback(CurOpc) || isLoadNoWriteback(CurOpc);
+    bool IsAnyStore = isStoreWithWriteback(CurOpc) || isStoreNoWriteback(CurOpc);
+
+    // .x (sign-extend) is only valid on loads, not stores.
+    if (ParsedSignExtend != 0 && IsAnyStore)
+      return Error(IDLoc, "sign-extend (.x) not allowed on store instructions");
+
+    // .a (writeback) requires a register base form.
+    if (ParsedWriteback != 0) {
+      if (isLoadNoWriteback(CurOpc))
+        return Error(IDLoc,
+                     "address writeback (.a) not allowed with non-register base");
+      if (isStoreNoWriteback(CurOpc))
+        return Error(IDLoc,
+                     "address writeback (.a) not allowed with non-register base");
+      if (!IsAnyLoad && !IsAnyStore)
+        return Error(IDLoc,
+                     "address writeback (.a) only valid on load/store instructions");
+    }
+
+    // .x only valid on loads.
+    if (ParsedSignExtend != 0 && !IsAnyLoad)
+      return Error(IDLoc,
+                   "sign-extend (.x) only valid on load instructions");
+
+    // .di only valid on loads/stores.
+    if (ParsedCacheBypass != 0 && !IsAnyLoad && !IsAnyStore)
+      return Error(IDLoc,
+                   "cache bypass (.di) only valid on load/store instructions");
+
     // Fill in the suffix operands (f, q, n) that aren't in the AsmString.
     // The matcher created an MCInst with only visible operands; we append
     // the suffix values so getBinaryCodeForInstr() can encode them.
     setSuffixOperands(Inst, MII, ParsedFlagBit, ParsedCondCode,
                        ParsedDelaySlot);
+
+    // Fill in the load/store modifier operands (x/w/e, v/D).
+    setLoadStoreModifiers(Inst, ParsedSignExtend, ParsedWriteback,
+                          ParsedCacheBypass);
 
     // Default delay slot for JL_l: .jd (2) when no explicit suffix was parsed.
     // The backend's MCInstLowering will need equivalent logic.
