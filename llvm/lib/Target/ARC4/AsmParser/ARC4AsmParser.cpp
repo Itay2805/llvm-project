@@ -69,6 +69,19 @@ public:
   bool isImm() const override { return Kind == Immediate; }
   bool isMem() const override { return false; }
 
+  bool isSimm9() const {
+    if (!isImm())
+      return false;
+    if (const auto *CE = dyn_cast<MCConstantExpr>(Expr)) {
+      int64_t Val = CE->getValue();
+      return Val >= -256 && Val <= 255;
+    }
+    return false;  // symbolic exprs don't fit in shimm
+  }
+
+  bool isLimm32() const { return isImm(); }
+  bool isBrTarget20() const { return isImm(); }
+
   StringRef getToken() const {
     assert(Kind == Token);
     return Tok;

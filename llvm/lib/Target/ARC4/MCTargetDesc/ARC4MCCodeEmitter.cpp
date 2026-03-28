@@ -28,10 +28,11 @@ namespace llvm {
 
 class ARC4MCCodeEmitter : public MCCodeEmitter {
   MCContext &Ctx;
+  const MCInstrInfo &MCII;
 
 public:
   ARC4MCCodeEmitter(const MCInstrInfo &MCII, MCContext &Ctx)
-      : Ctx(Ctx) {}
+      : Ctx(Ctx), MCII(MCII) {}
 
   uint64_t getBinaryCodeForInstr(const MCInst &Inst,
                                  SmallVectorImpl<MCFixup> &Fixups,
@@ -40,6 +41,10 @@ public:
   unsigned getMachineOpValue(const MCInst &Inst, const MCOperand &MO,
                              SmallVectorImpl<MCFixup> &Fixups,
                              const MCSubtargetInfo &STI) const;
+
+  unsigned getBranchTargetOpValue(const MCInst &Inst, unsigned OpIdx,
+                                  SmallVectorImpl<MCFixup> &Fixups,
+                                  const MCSubtargetInfo &STI) const;
 
   void encodeInstruction(const MCInst &Inst, SmallVectorImpl<char> &CB,
                          SmallVectorImpl<MCFixup> &Fixups,
@@ -61,14 +66,46 @@ unsigned ARC4MCCodeEmitter::getMachineOpValue(const MCInst &Inst,
   return 0;
 }
 
+unsigned ARC4MCCodeEmitter::getBranchTargetOpValue(
+    const MCInst &Inst, unsigned OpIdx, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = Inst.getOperand(OpIdx);
+  if (MO.isImm())
+    return static_cast<unsigned>(MO.getImm());
+
+  // For symbolic targets, emit a fixup.
+  assert(MO.isExpr());
+  Fixups.push_back(
+      MCFixup::create(0, MO.getExpr(), MCFixupKind(FK_Data_4)));
+  return 0;
+}
+
 void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
                                            SmallVectorImpl<char> &CB,
                                            SmallVectorImpl<MCFixup> &Fixups,
                                            const MCSubtargetInfo &STI) const {
   uint64_t Value = getBinaryCodeForInstr(Inst, Fixups, STI);
   ++MCNumEmitted;
-  // ARC4 is little-endian, 32-bit fixed-width instructions
-  support::endian::write<uint32_t>(CB, Value, llvm::endianness::little);
+
+  // Emit the 32-bit instruction word (little-endian).
+  support::endian::write<uint32_t>(CB, static_cast<uint32_t>(Value),
+                                   llvm::endianness::little);
+
+  // For 8-byte instructions (limm), emit the extra 32-bit limm word.
+  // Check the instruction size from the descriptor.
+  const MCInstrDesc &Desc = MCII.get(Inst.getOpcode());
+  if (Desc.getSize() == 8) {
+    // The limm value is in an immediate operand. Find it.
+    uint32_t LimmVal = 0;
+    for (unsigned I = 0, E = Inst.getNumOperands(); I < E; ++I) {
+      const MCOperand &MO = Inst.getOperand(I);
+      if (MO.isImm()) {
+        LimmVal = static_cast<uint32_t>(MO.getImm());
+        break;
+      }
+    }
+    support::endian::write<uint32_t>(CB, LimmVal, llvm::endianness::little);
+  }
 }
 
 MCCodeEmitter *createARC4MCCodeEmitter(const MCInstrInfo &MCII,
