@@ -23,7 +23,9 @@ def ARC4InstPrinter : AsmWriter {
   bit isMCAsmWriter = 1;
 }
 
-def ARC4AsmParser : AsmParser;
+def ARC4AsmParser : AsmParser {
+  let ShouldEmitMatchRegisterAltName = true;
+}
 
 def ARC4 : Target {
   let InstructionSet = ARC4InstrInfo;

@@ -15,6 +15,7 @@ add_llvm_target(ARC4CodeGen
   ARC4TargetMachine.cpp
 
   LINK_COMPONENTS
+  ARC4AsmParser
   ARC4Desc
   ARC4Info
   Core
@@ -27,5 +28,6 @@ add_llvm_target(ARC4CodeGen
   ARC4
   )
 
+add_subdirectory(AsmParser)
 add_subdirectory(TargetInfo)
 add_subdirectory(MCTargetDesc)
