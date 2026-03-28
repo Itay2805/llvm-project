@@ -28,6 +28,7 @@ def RetCC_ARC4 : CallingConv<[
   CCIfType<[i32], CCAssignToReg<[R0, R1]>>
 ]>;
 
-// Callee-saved registers: r13-r26 (general callee-saved)
-// blink (r31) is saved/restored explicitly by prologue/epilogue
-def CSR_ARC4 : CalleeSavedRegs<(add (sequence "R%u", 13, 26))>;
+// Callee-saved registers: r13-r25
+// r26 (gp) is reserved, not callee-saved.
+// blink (r31) is saved/restored explicitly by prologue/epilogue.
+def CSR_ARC4 : CalleeSavedRegs<(add (sequence "R%u", 13, 25))>;

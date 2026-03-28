@@ -33,6 +33,7 @@ ARC4RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
 
 BitVector ARC4RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
+  Reserved.set(ARC4::R26);  // GP (global pointer)
   Reserved.set(ARC4::R27);  // FP
   Reserved.set(ARC4::R28);  // SP
   Reserved.set(ARC4::R29);  // ilink1
