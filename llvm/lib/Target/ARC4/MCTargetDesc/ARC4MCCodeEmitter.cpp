@@ -84,33 +84,79 @@ unsigned ARC4MCCodeEmitter::getBranchTargetOpValue(
   return 0;
 }
 
-/// Check whether the instruction has a shimm operand by looking for sentinel
-/// values 63 (SHIMM) or 61 (SHIMM_UPDATE) in the B or C register fields.
-static void detectShimmFields(uint32_t Value, bool &BFieldIsShimm,
-                              bool &CFieldIsShimm) {
+/// Check whether the instruction has shimm sentinels in register fields.
+/// Checks A (discard), B, and C fields for sentinel 63 (SHIMM) or 61
+/// (SHIMM_UPDATE).
+static void detectShimmFields(uint32_t Value, bool &AFieldIsShimm,
+                              bool &BFieldIsShimm, bool &CFieldIsShimm) {
+  unsigned A = (Value >> 21) & 0x3F;
   unsigned B = (Value >> 15) & 0x3F;
   unsigned C = (Value >> 9) & 0x3F;
+  AFieldIsShimm = (A == 63 || A == 61);
   BFieldIsShimm = (B == 63 || B == 61);
   CFieldIsShimm = (C == 63 || C == 61);
 }
 
-/// Find the flag (f) operand value for shimm sentinel flipping.
-/// Returns the f operand value, or 0 if no f operand exists.
-/// The f operand is the last operand for shimm forms (rrs/rsr/rss, SOP rs),
-/// since shimm forms have: visible operands..., f.
-static int getShimmFlagValue(const MCInst &Inst, const MCInstrDesc &Desc) {
-  unsigned Opc = Inst.getOpcode();
+/// Find the flag (f) operand value for sentinel flipping.
+/// Returns the f operand value, or 0 if not applicable.
+///
+/// Sentinel flipping is needed for:
+/// - Shimm forms (rrs/rsr/rss, SOP rs): flip B/C sentinel 63->61
+/// - Discard forms (0rr/0rs/0sr/0ss/0rl/0lr, SOP 0r/0s/0l): flip A sentinel 63->61
+///
+/// For non-shimm non-discard forms, f is wired to bit[8] by TableGen
+/// and no post-hoc flip is needed.
+static int getSentinelFlagValue(const MCInst &Inst, const MCInstrDesc &Desc) {
   unsigned NumOps = Inst.getNumOperands();
   unsigned ExpOps = Desc.getNumOperands();
-  // Only check if all expected operands are present.
   if (NumOps < ExpOps || ExpOps == 0)
     return 0;
 
-  // For ALU shimm forms (rrs/rsr/rss) and SOP rs, the f operand is the
-  // last operand in the ins list. It's not wired to encoding bits, but
-  // we read it here to decide whether to flip sentinel 63->61.
+  // Check if any register field has sentinel 63 (SHIMM) that might need
+  // flipping to 61 (SHIMM_UPDATE). This covers both shimm operands in
+  // B/C fields AND discard sentinels in the A field.
+  //
+  // The f operand position varies by form but is always present as an
+  // i32imm. For shimm-only forms it's the last operand; for non-shimm
+  // discard forms it's typically at a known position. We use a simple
+  // heuristic: check the encoded instruction for sentinel 63 in any
+  // field. If found, read the f value from the instruction.
+  //
+  // Rather than enumerate all opcodes, we check the encoded word later.
+  // Here we just need to return the f operand value. The f operand is
+  // always the first i32imm after the visible operands for forms that
+  // need sentinel flipping. Since the caller only uses this when a
+  // sentinel 63 is detected, it's safe to always return the f value.
+
+  // For all instruction forms with suffix operands, the f operand
+  // position depends on the form. Find it by checking which operand
+  // looks like f (value 0 or 1, appears after visible operands).
+  // In our convention: for shimm forms, f is the last operand.
+  // For non-shimm forms, f comes after visible ops but before q.
+  //
+  // Simplest correct approach: the f operand is always an immediate
+  // with value 0 or 1. The last few operands are suffix operands
+  // (f, q, n in some order). Find the f by checking operand values.
+  // Actually, f is always at a specific position per instruction form.
+  // But since we can't easily determine the form here, we check
+  // whether the instruction HAS a sentinel 63 in A/B/C — if so,
+  // the last operand (for shimm) or the f-position operand (for
+  // discard non-shimm) tells us the flag value.
+
+  // The f operand is the last operand for shimm forms (only suffix is f).
+  // For non-shimm forms with f+q, f is at ExpOps-2 position.
+  // For non-shimm forms with f+q+n, f is at ExpOps-3 position.
+  // To simplify: just return the last operand if it's 0 or 1 (shimm forms),
+  // or check the second-to-last / third-to-last for other forms.
+  // Actually, the simplest: return 1 if ANY suffix operand is 1 and
+  // represents f. But that requires knowing which one is f.
+
+  // Pragmatic: enumerate the opcodes that need sentinel flipping.
+  // This includes ALL forms where A, B, or C could be sentinel 63.
+  unsigned Opc = Inst.getOpcode();
   switch (Opc) {
-  // ALU3 shimm variants: last operand is f
+  // --- Shimm forms: f is the LAST operand ---
+  // ALU3 shimm variants
   case ARC4::ADD_rrs: case ARC4::ADD_rsr: case ARC4::ADD_rss:
   case ARC4::ADD_0rs: case ARC4::ADD_0sr: case ARC4::ADD_0ss:
   case ARC4::ADC_rrs: case ARC4::ADC_rsr: case ARC4::ADC_rss:
@@ -128,7 +174,6 @@ static int getShimmFlagValue(const MCInst &Inst, const MCInstrDesc &Desc) {
   case ARC4::XOR_rrs: case ARC4::XOR_rsr: case ARC4::XOR_rss:
   case ARC4::XOR_0rs: case ARC4::XOR_0sr: case ARC4::XOR_0ss:
   // SOP shimm variants
-  // Note: ASL has no SOP form (subop 0 is flag). ASL is an add alias.
   case ARC4::ASR_rs:  case ARC4::ASR_0s:
   case ARC4::LSR_rs:  case ARC4::LSR_0s:
   case ARC4::ROR_rs:  case ARC4::ROR_0s:
@@ -137,8 +182,32 @@ static int getShimmFlagValue(const MCInst &Inst, const MCInstrDesc &Desc) {
   case ARC4::SEXW_rs: case ARC4::SEXW_0s:
   case ARC4::EXTB_rs: case ARC4::EXTB_0s:
   case ARC4::EXTW_rs: case ARC4::EXTW_0s:
-    // f is the last operand.
     return Inst.getOperand(ExpOps - 1).getImm();
+
+  // --- Non-shimm discard forms: A field has sentinel 63 ---
+  // For these, f is wired to bit[8] by TableGen, BUT we also need
+  // to flip A from 63->61. The f operand is at position ExpOps-2
+  // (before q) for rrr/rrl/rlr forms.
+  case ARC4::ADD_0rr: case ARC4::ADD_0rl: case ARC4::ADD_0lr:
+  case ARC4::ADC_0rr: case ARC4::ADC_0rl: case ARC4::ADC_0lr:
+  case ARC4::SUB_0rr: case ARC4::SUB_0rl: case ARC4::SUB_0lr:
+  case ARC4::SBC_0rr: case ARC4::SBC_0rl: case ARC4::SBC_0lr:
+  case ARC4::AND_0rr: case ARC4::AND_0rl: case ARC4::AND_0lr:
+  case ARC4::OR_0rr:  case ARC4::OR_0rl:  case ARC4::OR_0lr:
+  case ARC4::BIC_0rr: case ARC4::BIC_0rl: case ARC4::BIC_0lr:
+  case ARC4::XOR_0rr: case ARC4::XOR_0rl: case ARC4::XOR_0lr:
+  // SOP non-shimm discard: f is at ExpOps-2 (before q)
+  case ARC4::ASR_0r:  case ARC4::ASR_0l:
+  case ARC4::LSR_0r:  case ARC4::LSR_0l:
+  case ARC4::ROR_0r:  case ARC4::ROR_0l:
+  case ARC4::RRC_0r:  case ARC4::RRC_0l:
+  case ARC4::SEXB_0r: case ARC4::SEXB_0l:
+  case ARC4::SEXW_0r: case ARC4::SEXW_0l:
+  case ARC4::EXTB_0r: case ARC4::EXTB_0l:
+  case ARC4::EXTW_0r: case ARC4::EXTW_0l:
+    // f is at ExpOps-2 (before q). ins order: ..., f, q
+    return Inst.getOperand(ExpOps - 2).getImm();
+
   default:
     return 0;
   }
@@ -157,24 +226,23 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
   // change sentinel 63 -> 61 in the register field(s). This is the only
   // remaining post-hoc fixup because TableGen can't conditionally set bits.
   {
-    int FlagVal = getShimmFlagValue(Inst, Desc);
+    int FlagVal = getSentinelFlagValue(Inst, Desc);
     if (FlagVal != 0) {
       uint32_t V = static_cast<uint32_t>(Value);
-      bool BShimm, CShimm;
-      detectShimmFields(V, BShimm, CShimm);
-      if (CShimm) {
-        unsigned CField = (V >> 9) & 0x3F;
-        if (CField == 63) {
-          V &= ~(0x3FU << 9);
-          V |= (61U << 9);
-        }
+      bool AShimm, BShimm, CShimm;
+      detectShimmFields(V, AShimm, BShimm, CShimm);
+      // Flip sentinel 63 -> 61 in any field that has shimm
+      if (AShimm && ((V >> 21) & 0x3F) == 63) {
+        V &= ~(0x3FU << 21);
+        V |= (61U << 21);
       }
-      if (BShimm) {
-        unsigned BField = (V >> 15) & 0x3F;
-        if (BField == 63) {
-          V &= ~(0x3FU << 15);
-          V |= (61U << 15);
-        }
+      if (BShimm && ((V >> 15) & 0x3F) == 63) {
+        V &= ~(0x3FU << 15);
+        V |= (61U << 15);
+      }
+      if (CShimm && ((V >> 9) & 0x3F) == 63) {
+        V &= ~(0x3FU << 9);
+        V |= (61U << 9);
       }
       Value = V;
     }

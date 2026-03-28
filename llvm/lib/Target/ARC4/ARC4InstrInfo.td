@@ -129,37 +129,37 @@ multiclass ALU3<bits<5> opcode, string mnemonic> {
     def _0rr : ARC4InstALU3_rrr<opcode,
       (outs), (ins GPR32:$b, GPR32:$c, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $b, $c", []> {
-      let a = 0b111101;  // sentinel 61
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
 
     def _0rs : ARC4InstALU3_rrs<opcode,
       (outs), (ins GPR32:$b, simm9:$shimm, i32imm:$f),
       mnemonic # "\t0, $b, $shimm", []> {
-      let a = 0b111101;
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
 
     def _0sr : ARC4InstALU3_rsr<opcode,
       (outs), (ins simm9:$shimm, GPR32:$c, i32imm:$f),
       mnemonic # "\t0, $shimm, $c", []> {
-      let a = 0b111101;
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
 
     def _0ss : ARC4InstALU3_rss<opcode,
       (outs), (ins simm9:$shimm, i32imm:$f),
       mnemonic # "\t0, $shimm, $shimm", []> {
-      let a = 0b111101;
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
 
     def _0rl : ARC4InstALU3_rrl<opcode,
       (outs), (ins GPR32:$b, limm32:$limm, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $b, $limm", []> {
-      let a = 0b111101;
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
 
     def _0lr : ARC4InstALU3_rlr<opcode,
       (outs), (ins limm32:$limm, GPR32:$c, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $limm, $c", []> {
-      let a = 0b111101;
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
   }
 }
@@ -202,19 +202,19 @@ multiclass SOP<bits<6> subop, string mnemonic> {
     def _0r : ARC4InstSOP_rr<subop,
       (outs), (ins GPR32:$b, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $b", []> {
-      let a = 0b111101;  // sentinel 61
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
 
     def _0s : ARC4InstSOP_rs<subop,
       (outs), (ins simm9:$shimm, i32imm:$f),
       mnemonic # "\t0, $shimm", []> {
-      let a = 0b111101;
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
 
     def _0l : ARC4InstSOP_rl<subop,
       (outs), (ins limm32:$limm, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $limm", []> {
-      let a = 0b111101;
+      let a = 0b111111;  // sentinel 63 (no flag); MCCodeEmitter flips to 61 for .f
     }
   }
 }
