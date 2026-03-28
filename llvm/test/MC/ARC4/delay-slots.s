@@ -59,23 +59,23 @@ j.eq.jd [r5]
 jl.ne.d [r5]
 
 ; ============================================================
-; Default .jd for branch-and-link and jump-and-link
-; When no delay slot suffix is specified, bl and jl default to .jd
-; (bits[6:5]=10). Plain b and j still default to .nd (bits[6:5]=00).
+; Default delay slot behavior:
+; Only jl with limm defaults to .jd (bits[6:5]=10).
+; All other forms (b, bl, j, jl-reg) default to .nd (bits[6:5]=00).
 ; ============================================================
 
-; bl without suffix defaults to .jd
-; CHECK: bl	1000                    ; encoding: [0x40,0xf4,0x01,0x28]
-bl 1000
 ; jl with limm without suffix defaults to .jd
 ; CHECK: jl	1000                    ; encoding: [0x40,0x02,0x1f,0x38,0xe8,0x03,0x00,0x00]
 jl 1000
-; jl with register without suffix defaults to .jd
-; CHECK: jl	[r5]                    ; encoding: [0x40,0x82,0x02,0x38]
+; jl with register without suffix defaults to .nd (NOT .jd)
+; CHECK: jl	[r5]                    ; encoding: [0x00,0x82,0x02,0x38]
 jl [r5]
-; j without suffix still defaults to .nd (not a link instruction)
+; bl without suffix defaults to .nd (PC-relative, not limm)
+; CHECK: bl	1000                    ; encoding: [0x00,0xf4,0x01,0x28]
+bl 1000
+; j without suffix defaults to .nd
 ; CHECK: j	1000                    ; encoding: [0x00,0x00,0x1f,0x38,0xe8,0x03,0x00,0x00]
 j 1000
-; b without suffix still defaults to .nd
+; b without suffix defaults to .nd
 ; CHECK: b	100                     ; encoding: [0x00,0x32,0x00,0x20]
 b 100

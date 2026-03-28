@@ -171,9 +171,11 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
   {
     unsigned Opc = Inst.getOpcode();
     if (NumInstOps == NumDefOps) {
-      // No trailing annotations — apply default .jd for link instructions.
-      if (Opc == ARC4::BL || Opc == ARC4::BLcc ||
-          Opc == ARC4::JL_l || Opc == ARC4::JL_r) {
+      // No trailing annotations — apply default .jd ONLY for jump-and-link
+      // with limm (JL_l). The architecture requires .jd so the delay slot
+      // executes only when the jump is taken, avoiding corruption of the
+      // return address. All other branch/jump forms default to .nd.
+      if (Opc == ARC4::JL_l) {
         uint32_t V = static_cast<uint32_t>(Value);
         V = (V & ~(0x3U << 5)) | (0x2U << 5);  // .jd = 2
         Value = V;
