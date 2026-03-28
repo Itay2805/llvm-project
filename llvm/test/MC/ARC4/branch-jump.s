@@ -22,12 +22,12 @@ j [r5]
 ; CHECK: j	[r5]                    ; encoding: [0x00,0x80,0x02,0x38]
 j r5
 
-; --- Jump and link: register ---
-; CHECK: jl	[r5]                    ; encoding: [0x00,0x82,0x02,0x38]
+; --- Jump and link: register (defaults to .jd) ---
+; CHECK: jl	[r5]                    ; encoding: [0x40,0x82,0x02,0x38]
 jl [r5]
 
-; --- Jump and link: blink register (r31) ---
-; CHECK: jl	[blink]                 ; encoding: [0x00,0x82,0x0f,0x38]
+; --- Jump and link: blink register (r31, defaults to .jd) ---
+; CHECK: jl	[blink]                 ; encoding: [0x40,0x82,0x0f,0x38]
 jl [r31]
 
 ; --- Flag: register operand ---

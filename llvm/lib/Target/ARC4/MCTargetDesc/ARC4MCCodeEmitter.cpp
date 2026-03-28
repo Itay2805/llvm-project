@@ -159,6 +159,28 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
     Value = V;
   }
 
+  // Default delay slot for branch-and-link (BL) and jump-and-link with limm
+  // (JL_l): when no explicit delay suffix was specified, use .jd (bits[6:5]=10)
+  // instead of .nd (00). The architecture requires .jd for correct operation
+  // of the delay slot on link instructions — the delay slot instruction must
+  // execute only when the jump is taken.
+  //
+  // This applies when there are no trailing annotations (user wrote bare
+  // "bl target" or "jl target" without any suffix). When annotations are
+  // present, the user explicitly chose a delay mode and we respect it.
+  {
+    unsigned Opc = Inst.getOpcode();
+    if (NumInstOps == NumDefOps) {
+      // No trailing annotations — apply default .jd for link instructions.
+      if (Opc == ARC4::BL || Opc == ARC4::BLcc ||
+          Opc == ARC4::JL_l || Opc == ARC4::JL_r) {
+        uint32_t V = static_cast<uint32_t>(Value);
+        V = (V & ~(0x3U << 5)) | (0x2U << 5);  // .jd = 2
+        Value = V;
+      }
+    }
+  }
+
   // Emit the 32-bit instruction word (little-endian).
   support::endian::write<uint32_t>(CB, static_cast<uint32_t>(Value),
                                    llvm::endianness::little);

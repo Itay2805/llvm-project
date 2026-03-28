@@ -449,6 +449,13 @@ multiclass StoreAll<string mnemonic, bits<2> size> {
       let D = 0;
       let y = size;
     }
+
+    def _sls : ARC4InstST_sls<
+      (outs), (ins limm32:$limm, st_offset9:$offset),
+      mnemonic # "\t$offset, [$limm, $offset]", []> {
+      let D = 0;
+      let y = size;
+    }
   }
 }
 
@@ -522,6 +529,12 @@ def : InstAlias<"ldw\t$a, [$b]", (LDW_rs GPR32:$a, GPR32:$b, 0)>;
 def : InstAlias<"st\t$c, [$b]", (ST_rrs GPR32:$c, GPR32:$b, 0)>;
 def : InstAlias<"stb\t$c, [$b]", (STB_rrs GPR32:$c, GPR32:$b, 0)>;
 def : InstAlias<"stw\t$c, [$b]", (STW_rrs GPR32:$c, GPR32:$b, 0)>;
+
+// st c, [limm] => st c, [limm, 0]  — store reg to absolute address
+// Priority 0: must not shadow the register alias above.
+def : InstAlias<"st\t$c, [$addr]", (ST_rls GPR32:$c, limm32:$addr, 0), 0>;
+def : InstAlias<"stb\t$c, [$addr]", (STB_rls GPR32:$c, limm32:$addr, 0), 0>;
+def : InstAlias<"stw\t$c, [$addr]", (STW_rls GPR32:$c, limm32:$addr, 0), 0>;
 
 // Hidden rss aliases: 2-operand form (after parser collapses duplicate imms).
 // These exist because the AsmMatcher can't parse "$shimm, $shimm" (tied operand

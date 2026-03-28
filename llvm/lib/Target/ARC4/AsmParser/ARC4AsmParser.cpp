@@ -287,6 +287,7 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
   int CondCode = 0;     // 5-bit condition code (0 = always)
   int FlagBit = 0;      // 1 = .f suffix present
   int DelaySlot = 0;    // 0=nd, 1=d, 2=jd
+  bool HasExplicitSuffix = false;  // true if any dot-suffix was parsed
 
   // Process dot-separated suffixes from left to right.
   StringRef Remaining = Name;
@@ -308,13 +309,14 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     // Flag suffix.
     if (Suffix == "f") {
       FlagBit = 1;
+      HasExplicitSuffix = true;
       continue;
     }
 
     // Delay slot suffixes.
-    if (Suffix == "nd") { DelaySlot = 0; continue; }
-    if (Suffix == "d")  { DelaySlot = 1; continue; }
-    if (Suffix == "jd") { DelaySlot = 2; continue; }
+    if (Suffix == "nd") { DelaySlot = 0; HasExplicitSuffix = true; continue; }
+    if (Suffix == "d")  { DelaySlot = 1; HasExplicitSuffix = true; continue; }
+    if (Suffix == "jd") { DelaySlot = 2; HasExplicitSuffix = true; continue; }
 
     // Sign extend, writeback, cache bypass - strip for now.
     if (Suffix == "x" || Suffix == "a" || Suffix == "di")
@@ -324,6 +326,7 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     int CC = mapConditionCode(Suffix);
     if (CC >= 0) {
       CondCode = CC;
+      HasExplicitSuffix = true;
       continue;
     }
 
@@ -466,8 +469,9 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
 
   // Append trailing annotation operands for the MCCodeEmitter.
   // Convention: condition code, flag bit, delay slot — in that order.
-  // Only append if any are non-default, to avoid bloating simple instructions.
-  if (CondCode != 0 || FlagBit != 0 || DelaySlot != 0) {
+  // Append if any are non-default, OR if any explicit suffix was parsed
+  // (so the encoder can distinguish "no suffix" from explicit ".nd").
+  if (CondCode != 0 || FlagBit != 0 || DelaySlot != 0 || HasExplicitSuffix) {
     // We use ARC4Operand::createImm with MCConstantExpr to carry the values.
     // These will become MCOperand::createImm in the MCInst.
     // Marker: condition code
@@ -541,13 +545,13 @@ static bool isShimmForm(unsigned Opc) {
   // Store forms (all stores use shimm offset in bits[8:0])
   case ARC4::ST_rrs:  case ARC4::ST_srs:  case ARC4::ST_rss:
   case ARC4::ST_sss:  case ARC4::ST_rls:  case ARC4::ST_lrs:
-  case ARC4::ST_lls:
+  case ARC4::ST_lls:  case ARC4::ST_sls:
   case ARC4::STB_rrs: case ARC4::STB_srs: case ARC4::STB_rss:
   case ARC4::STB_sss: case ARC4::STB_rls: case ARC4::STB_lrs:
-  case ARC4::STB_lls:
+  case ARC4::STB_lls: case ARC4::STB_sls:
   case ARC4::STW_rrs: case ARC4::STW_srs: case ARC4::STW_rss:
   case ARC4::STW_sss: case ARC4::STW_rls: case ARC4::STW_lrs:
-  case ARC4::STW_lls:
+  case ARC4::STW_lls: case ARC4::STW_sls:
   // Load shimm forms (opcode 1)
   case ARC4::LD_rs:   case ARC4::LD_ss:
   case ARC4::LDB_rs:  case ARC4::LDB_ss:
@@ -558,8 +562,8 @@ static bool isShimmForm(unsigned Opc) {
   }
 }
 
-/// Try to match a store instruction to a shimm form (srs or sss) when the
-/// AsmMatcher selected a limm form or failed to match.  Returns true if a
+/// Try to match a store instruction to a shimm form (srs, sss, or sls) when
+/// the AsmMatcher selected a limm form or failed to match.  Returns true if a
 /// shimm form was successfully emitted.
 ///
 /// Store shimm forms have tied operands in their AsmString which the
@@ -572,14 +576,23 @@ static bool isShimmForm(unsigned Opc) {
 /// Pattern sss: "st val, [base, offset]" where val == base == offset, all shimm.
 ///   After inner-bracket collapse in parser: [mnem, imm, [, imm, ]]
 ///   Original form: [mnem, imm, [, imm, imm, ]]  (all three equal)
+///
+/// Pattern sls: "st shimm, [limm]" — shimm value, limm address.
+///   Operands: [mnem, imm_val, [, imm_addr, ]]  (5 operands)
+///   The limm is adjusted: limm_encoded = addr - shimm.
 static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
                              MCInst &Inst) {
-  // Map mnemonic to srs/sss opcode pairs and size.
-  unsigned SRSOpc = 0, SSSOpc = 0;
-  if (Mnemonic == "st")       { SRSOpc = ARC4::ST_srs;  SSSOpc = ARC4::ST_sss;  }
-  else if (Mnemonic == "stb") { SRSOpc = ARC4::STB_srs; SSSOpc = ARC4::STB_sss; }
-  else if (Mnemonic == "stw") { SRSOpc = ARC4::STW_srs; SSSOpc = ARC4::STW_sss; }
-  else return false;
+  // Map mnemonic to srs/sss/sls opcode triples.
+  unsigned SRSOpc = 0, SSSOpc = 0, SLSOpc = 0;
+  if (Mnemonic == "st") {
+    SRSOpc = ARC4::ST_srs;  SSSOpc = ARC4::ST_sss;  SLSOpc = ARC4::ST_sls;
+  } else if (Mnemonic == "stb") {
+    SRSOpc = ARC4::STB_srs; SSSOpc = ARC4::STB_sss; SLSOpc = ARC4::STB_sls;
+  } else if (Mnemonic == "stw") {
+    SRSOpc = ARC4::STW_srs; SSSOpc = ARC4::STW_sss; SLSOpc = ARC4::STW_sls;
+  } else {
+    return false;
+  }
 
   // Pattern srs: [mnem, imm_val, [, reg_base, imm_offset, ]]  (6 operands)
   if (Operands.size() == 6) {
@@ -607,8 +620,7 @@ static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
     }
   }
 
-  // Pattern sss (after inner bracket collapse): [mnem, imm_val, [, imm_base, ]]
-  // (5 operands) where val == base, both shimm.
+  // 5-operand patterns: [mnem, imm_val, [, imm_addr, ]]
   if (Operands.size() == 5) {
     auto *O1 = static_cast<ARC4Operand *>(Operands[1].get());
     auto *O2 = static_cast<ARC4Operand *>(Operands[2].get());
@@ -617,14 +629,26 @@ static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
     if (O1->isImm() && O2->isToken() && O2->getToken() == "[" &&
         O3->isImm() && O4->isToken() && O4->getToken() == "]") {
       const auto *CEVal = dyn_cast<MCConstantExpr>(O1->Expr);
-      const auto *CEBase = dyn_cast<MCConstantExpr>(O3->Expr);
-      if (CEVal && CEBase && CEVal->getValue() == CEBase->getValue()) {
+      const auto *CEAddr = dyn_cast<MCConstantExpr>(O3->Expr);
+      if (CEVal && CEAddr) {
         int64_t Val = CEVal->getValue();
+        int64_t Addr = CEAddr->getValue();
         if (Val >= -256 && Val <= 255) {
-          // Build ST_sss: (ins st_offset9:$offset)
+          if (Val == Addr) {
+            // Pattern sss: val == addr, both shimm.
+            // Build ST_sss: (ins st_offset9:$offset)
+            Inst.clear();
+            Inst.setOpcode(SSSOpc);
+            Inst.addOperand(MCOperand::createImm(Val));  // offset (= val = base)
+            return true;
+          }
+          // Pattern sls: shimm value, limm address.
+          // Build ST_sls: (ins limm32:$limm, st_offset9:$offset)
+          // The limm is adjusted: limm_encoded = addr - shimm.
           Inst.clear();
-          Inst.setOpcode(SSSOpc);
-          Inst.addOperand(MCOperand::createImm(Val));    // offset (= val = base)
+          Inst.setOpcode(SLSOpc);
+          Inst.addOperand(MCOperand::createImm(Addr - Val)); // adjusted limm
+          Inst.addOperand(MCOperand::createImm(Val));        // offset (= val)
           return true;
         }
       }

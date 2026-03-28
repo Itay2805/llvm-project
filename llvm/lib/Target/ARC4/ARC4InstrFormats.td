@@ -575,6 +575,27 @@ class ARC4InstST_lls<dag outs, dag ins, string asmstr, list<dag> pattern>
   let Inst{8-0}   = offset;
 }
 
+// --- ST shimm, [limm, shimm]: shimm value, limm base ---
+// C = sentinel 63 (SHIMM, value is shimm), B = sentinel 62 (LIMM). Size=8.
+// The shimm value serves as both the stored value and the offset.
+// The assembler adjusts the limm: limm_encoded = address - shimm.
+class ARC4InstST_sls<dag outs, dag ins, string asmstr, list<dag> pattern>
+    : ARC4Inst8<outs, ins, asmstr, pattern> {
+  bits<1> D;
+  bits<2> y;
+  bits<9> offset;  // shimm value (= stored value = offset)
+
+  let Inst{31-27} = 0b00010;
+  let Inst{26}    = D;
+  let Inst{25}    = 0;
+  let Inst{24}    = 0;        // no writeback with limm base
+  let Inst{23-22} = y;
+  let Inst{21}    = 0;
+  let Inst{20-15} = 0b111110;  // B = LIMM sentinel
+  let Inst{14-9}  = 0b111111;  // C = SHIMM sentinel (value is shimm)
+  let Inst{8-0}   = offset;
+}
+
 //===----------------------------------------------------------------------===//
 // Flag instruction  (opcode 3, A = sentinel 61, C = 0)
 //
