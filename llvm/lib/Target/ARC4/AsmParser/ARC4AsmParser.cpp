@@ -8,6 +8,7 @@
 
 #include "MCTargetDesc/ARC4MCTargetDesc.h"
 #include "TargetInfo/ARC4TargetInfo.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/MC/MCContext.h"
@@ -124,6 +125,7 @@ public:
 class ARC4AsmParser : public MCTargetAsmParser {
   MCRegister tryParseRegisterName(StringRef Name);
   bool parseOperand(OperandVector &Operands);
+  bool parseRegOrImm(OperandVector &Operands);
 
 #define GET_ASSEMBLER_HEADER
 #include "ARC4GenAsmMatcher.inc"
@@ -179,6 +181,55 @@ ParseStatus ARC4AsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
 bool ARC4AsmParser::parseOperand(OperandVector &Operands) {
   SMLoc Start = getLexer().getLoc();
 
+  // Memory operand: [base] or [base, offset]
+  if (getLexer().is(AsmToken::LBrac)) {
+    Operands.push_back(ARC4Operand::createToken("[", Start));
+    getParser().Lex(); // eat '['
+
+    // Parse first operand inside brackets (base).
+    if (parseRegOrImm(Operands))
+      return true;
+
+    // If comma follows, parse second operand (offset).
+    if (getLexer().is(AsmToken::Comma)) {
+      getParser().Lex(); // eat ','
+      if (parseRegOrImm(Operands))
+        return true;
+    }
+
+    if (getLexer().isNot(AsmToken::RBrac))
+      return Error(getLexer().getLoc(), "expected ']'");
+
+    SMLoc End = getLexer().getLoc();
+    Operands.push_back(ARC4Operand::createToken("]", End));
+    getParser().Lex(); // eat ']'
+    return false;
+  }
+
+  // Try register.
+  if (getLexer().is(AsmToken::Identifier)) {
+    MCRegister Reg = tryParseRegisterName(getLexer().getTok().getIdentifier());
+    if (Reg) {
+      SMLoc End = getLexer().getLoc();
+      getParser().Lex();
+      Operands.push_back(ARC4Operand::createReg(Reg, Start, End));
+      return false;
+    }
+  }
+
+  // Try immediate / expression.
+  const MCExpr *Expr;
+  if (!getParser().parseExpression(Expr)) {
+    Operands.push_back(
+        ARC4Operand::createImm(Expr, Start, getLexer().getLoc()));
+    return false;
+  }
+  return true;
+}
+
+bool ARC4AsmParser::parseRegOrImm(OperandVector &Operands) {
+  SMLoc Start = getLexer().getLoc();
+
   // Try register.
   if (getLexer().is(AsmToken::Identifier)) {
     MCRegister Reg = tryParseRegisterName(getLexer().getTok().getIdentifier());
@@ -203,7 +254,58 @@ bool ARC4AsmParser::parseOperand(OperandVector &Operands) {
 bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
                                      SMLoc NameLoc,
                                      OperandVector &Operands) {
-  Operands.push_back(ARC4Operand::createToken(Name, NameLoc));
+  // Strip mnemonic suffixes.
+  // Load/store size suffixes transform the mnemonic: ld.b -> ldb, st.w -> stw.
+  // Other suffixes (.f, .d, .nd, .jd, condition codes) are stripped for now.
+  StringRef BaseName = Name;
+  SmallString<16> MnemonicBuf;
+
+  // Process dot-separated suffixes from left to right.
+  StringRef Remaining = BaseName;
+  StringRef Mnemonic;
+  std::tie(Mnemonic, Remaining) = Remaining.split('.');
+
+  // Accumulate the base mnemonic, handling size suffixes that merge.
+  MnemonicBuf = Mnemonic;
+  while (!Remaining.empty()) {
+    StringRef Suffix;
+    std::tie(Suffix, Remaining) = Remaining.split('.');
+
+    // Size suffixes for load/store: merge into base mnemonic.
+    if (Suffix == "b" || Suffix == "w") {
+      MnemonicBuf += Suffix;
+      continue;
+    }
+
+    // Known suffixes to strip: flag (.f), delay slots (.d, .nd, .jd),
+    // sign extend (.x), address writeback (.a), cache bypass (.di),
+    // condition codes.
+    if (Suffix == "f" || Suffix == "d" || Suffix == "nd" || Suffix == "jd" ||
+        Suffix == "x" || Suffix == "a" || Suffix == "di" ||
+        // Condition codes:
+        Suffix == "eq" || Suffix == "ne" || Suffix == "lt" ||
+        Suffix == "gt" || Suffix == "le" || Suffix == "ge" ||
+        Suffix == "lo" || Suffix == "hs" || Suffix == "z" ||
+        Suffix == "nz" || Suffix == "p" || Suffix == "n" ||
+        Suffix == "c" || Suffix == "nc" || Suffix == "v" ||
+        Suffix == "nv" || Suffix == "pnz" || Suffix == "al" ||
+        Suffix == "hi") {
+      // Stripped — not wired up yet.
+      continue;
+    }
+
+    // Unknown suffix: keep it attached (may be part of the mnemonic).
+    MnemonicBuf += '.';
+    MnemonicBuf += Suffix;
+  }
+
+  // If the mnemonic was modified, persist the new string in the MCContext.
+  // Otherwise, use the original Name which is already stable.
+  if (MnemonicBuf == Name)
+    Operands.push_back(ARC4Operand::createToken(Name, NameLoc));
+  else
+    Operands.push_back(ARC4Operand::createToken(
+        getContext().allocateString(MnemonicBuf), NameLoc));
 
   if (getLexer().isNot(AsmToken::EndOfStatement)) {
     if (parseOperand(Operands))

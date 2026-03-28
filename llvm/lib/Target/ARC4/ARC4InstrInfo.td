@@ -496,3 +496,13 @@ def : InstAlias<"lsl\t$a, $b, $c", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$c)>;
 
 // rlc a, b => adc a, b, b  (rotate left through carry)
 def : InstAlias<"rlc\t$a, $b", (ADC_rrr GPR32:$a, GPR32:$b, GPR32:$b)>;
+
+// j [reg] / jl [reg] — bracket syntax for jump through register
+def : InstAlias<"j\t[$b]", (J_r GPR32:$b)>;
+def : InstAlias<"jl\t[$b]", (JL_r GPR32:$b)>;
+
+// ld a, [b] => ld a, [b, 0]  — single-register load with implicit 0 offset
+def : InstAlias<"ld\t$a, [$b]", (LD_rs GPR32:$a, GPR32:$b, 0)>;
+
+// st c, [b] => st c, [b, 0]  — single-register store with implicit 0 offset
+def : InstAlias<"st\t$c, [$b]", (ST_rrs GPR32:$c, GPR32:$b, 0)>;
