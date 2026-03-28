@@ -318,64 +318,70 @@ let isCall = 1 in {
 //   LD1: rs (reg+shimm), ss (shimm+shimm), l (limm base, shimm=0)
 //===----------------------------------------------------------------------===//
 
-let mayLoad = 1, hasSideEffects = 0 in {
-  // --- Opcode 0: ld a, [b, c] ---
-  def LD_rr : ARC4InstLD0_rr<
-    (outs GPR32:$a), (ins GPR32:$b, GPR32:$c),
-    "ld\t$a, [$b, $c]", []> {
-    let e = 0;
-    let w = 0;
-    let z = 0;
-    let x = 0;
-  }
+multiclass LoadAll<string mnemonic, bits<2> size> {
+  let mayLoad = 1, hasSideEffects = 0 in {
+    // --- Opcode 0: ld a, [b, c] ---
+    def _rr : ARC4InstLD0_rr<
+      (outs GPR32:$a), (ins GPR32:$b, GPR32:$c),
+      mnemonic # "\t$a, [$b, $c]", []> {
+      let e = 0;
+      let w = 0;
+      let z = size;
+      let x = 0;
+    }
 
-  // --- Opcode 0: ld a, [b, limm] ---
-  def LD_rl : ARC4InstLD0_rl<
-    (outs GPR32:$a), (ins GPR32:$b, limm32:$limm),
-    "ld\t$a, [$b, $limm]", []> {
-    let e = 0;
-    let w = 0;
-    let z = 0;
-    let x = 0;
-  }
+    // --- Opcode 0: ld a, [b, limm] ---
+    def _rl : ARC4InstLD0_rl<
+      (outs GPR32:$a), (ins GPR32:$b, limm32:$limm),
+      mnemonic # "\t$a, [$b, $limm]", []> {
+      let e = 0;
+      let w = 0;
+      let z = size;
+      let x = 0;
+    }
 
-  // --- Opcode 0: ld a, [limm, c] ---
-  def LD_lr : ARC4InstLD0_lr<
-    (outs GPR32:$a), (ins limm32:$limm, GPR32:$c),
-    "ld\t$a, [$limm, $c]", []> {
-    let e = 0;
-    let z = 0;
-    let x = 0;
-  }
+    // --- Opcode 0: ld a, [limm, c] ---
+    def _lr : ARC4InstLD0_lr<
+      (outs GPR32:$a), (ins limm32:$limm, GPR32:$c),
+      mnemonic # "\t$a, [$limm, $c]", []> {
+      let e = 0;
+      let z = size;
+      let x = 0;
+    }
 
-  // --- Opcode 1: ld a, [b, shimm] ---
-  def LD_rs : ARC4InstLD1_rs<
-    (outs GPR32:$a), (ins GPR32:$b, ld_offset9:$shimm),
-    "ld\t$a, [$b, $shimm]", []> {
-    let E = 0;
-    let W = 0;
-    let Z = 0;
-    let X = 0;
-  }
+    // --- Opcode 1: ld a, [b, shimm] ---
+    def _rs : ARC4InstLD1_rs<
+      (outs GPR32:$a), (ins GPR32:$b, ld_offset9:$shimm),
+      mnemonic # "\t$a, [$b, $shimm]", []> {
+      let E = 0;
+      let W = 0;
+      let Z = size;
+      let X = 0;
+    }
 
-  // --- Opcode 1: ld a, [shimm, shimm] ---
-  def LD_ss : ARC4InstLD1_ss<
-    (outs GPR32:$a), (ins ld_offset9:$shimm),
-    "ld\t$a, [$shimm]", []> {
-    let E = 0;
-    let Z = 0;
-    let X = 0;
-  }
+    // --- Opcode 1: ld a, [shimm, shimm] ---
+    def _ss : ARC4InstLD1_ss<
+      (outs GPR32:$a), (ins ld_offset9:$shimm),
+      mnemonic # "\t$a, [$shimm]", []> {
+      let E = 0;
+      let Z = size;
+      let X = 0;
+    }
 
-  // --- Opcode 1: ld a, [limm] ---
-  def LD_l : ARC4InstLD1_l<
-    (outs GPR32:$a), (ins limm32:$limm),
-    "ld\t$a, [$limm]", []> {
-    let E = 0;
-    let Z = 0;
-    let X = 0;
+    // --- Opcode 1: ld a, [limm] ---
+    def _l : ARC4InstLD1_l<
+      (outs GPR32:$a), (ins limm32:$limm),
+      mnemonic # "\t$a, [$limm]", []> {
+      let E = 0;
+      let Z = size;
+      let X = 0;
+    }
   }
 }
+
+defm LD  : LoadAll<"ld",  0b00>;  // word
+defm LDB : LoadAll<"ldb", 0b01>;  // byte
+defm LDW : LoadAll<"ldw", 0b10>;  // halfword
 
 //===----------------------------------------------------------------------===//
 // Store Instructions  (opcode 2)
@@ -390,59 +396,65 @@ let mayLoad = 1, hasSideEffects = 0 in {
 //   lls: st limm, [limm, offset]      (both limm, shimm offset)
 //===----------------------------------------------------------------------===//
 
-let mayStore = 1, hasSideEffects = 0 in {
-  def ST_rrs : ARC4InstST_rrs<
-    (outs), (ins GPR32:$c, GPR32:$b, st_offset9:$offset),
-    "st\t$c, [$b, $offset]", []> {
-    let D = 0;
-    let v = 0;
-    let y = 0;
-  }
+multiclass StoreAll<string mnemonic, bits<2> size> {
+  let mayStore = 1, hasSideEffects = 0 in {
+    def _rrs : ARC4InstST_rrs<
+      (outs), (ins GPR32:$c, GPR32:$b, st_offset9:$offset),
+      mnemonic # "\t$c, [$b, $offset]", []> {
+      let D = 0;
+      let v = 0;
+      let y = size;
+    }
 
-  def ST_srs : ARC4InstST_srs<
-    (outs), (ins simm9:$offset, GPR32:$b),
-    "st\t$offset, [$b, $offset]", []> {
-    let D = 0;
-    let v = 0;
-    let y = 0;
-  }
+    def _srs : ARC4InstST_srs<
+      (outs), (ins simm9:$offset, GPR32:$b),
+      mnemonic # "\t$offset, [$b, $offset]", []> {
+      let D = 0;
+      let v = 0;
+      let y = size;
+    }
 
-  def ST_rss : ARC4InstST_rss<
-    (outs), (ins GPR32:$c, st_offset9:$offset),
-    "st\t$c, [$offset]", []> {
-    let D = 0;
-    let y = 0;
-  }
+    def _rss : ARC4InstST_rss<
+      (outs), (ins GPR32:$c, st_offset9:$offset),
+      mnemonic # "\t$c, [$offset]", []> {
+      let D = 0;
+      let y = size;
+    }
 
-  def ST_sss : ARC4InstST_sss<
-    (outs), (ins st_offset9:$offset),
-    "st\t$offset, [$offset]", []> {
-    let D = 0;
-    let y = 0;
-  }
+    def _sss : ARC4InstST_sss<
+      (outs), (ins st_offset9:$offset),
+      mnemonic # "\t$offset, [$offset]", []> {
+      let D = 0;
+      let y = size;
+    }
 
-  def ST_rls : ARC4InstST_rls<
-    (outs), (ins GPR32:$c, limm32:$limm, st_offset9:$offset),
-    "st\t$c, [$limm, $offset]", []> {
-    let D = 0;
-    let y = 0;
-  }
+    def _rls : ARC4InstST_rls<
+      (outs), (ins GPR32:$c, limm32:$limm, st_offset9:$offset),
+      mnemonic # "\t$c, [$limm, $offset]", []> {
+      let D = 0;
+      let y = size;
+    }
 
-  def ST_lrs : ARC4InstST_lrs<
-    (outs), (ins limm32:$limm, GPR32:$b, st_offset9:$offset),
-    "st\t$limm, [$b, $offset]", []> {
-    let D = 0;
-    let v = 0;
-    let y = 0;
-  }
+    def _lrs : ARC4InstST_lrs<
+      (outs), (ins limm32:$limm, GPR32:$b, st_offset9:$offset),
+      mnemonic # "\t$limm, [$b, $offset]", []> {
+      let D = 0;
+      let v = 0;
+      let y = size;
+    }
 
-  def ST_lls : ARC4InstST_lls<
-    (outs), (ins limm32:$limm, st_offset9:$offset),
-    "st\t$limm, [$limm, $offset]", []> {
-    let D = 0;
-    let y = 0;
+    def _lls : ARC4InstST_lls<
+      (outs), (ins limm32:$limm, st_offset9:$offset),
+      mnemonic # "\t$limm, [$limm, $offset]", []> {
+      let D = 0;
+      let y = size;
+    }
   }
 }
+
+defm ST  : StoreAll<"st",  0b00>;  // word
+defm STB : StoreAll<"stb", 0b01>;  // byte
+defm STW : StoreAll<"stw", 0b10>;  // halfword
 
 //===----------------------------------------------------------------------===//
 // Flag Instruction  (opcode 3, A=61, C=0)
@@ -503,6 +515,24 @@ def : InstAlias<"jl\t[$b]", (JL_r GPR32:$b)>;
 
 // ld a, [b] => ld a, [b, 0]  — single-register load with implicit 0 offset
 def : InstAlias<"ld\t$a, [$b]", (LD_rs GPR32:$a, GPR32:$b, 0)>;
+def : InstAlias<"ldb\t$a, [$b]", (LDB_rs GPR32:$a, GPR32:$b, 0)>;
+def : InstAlias<"ldw\t$a, [$b]", (LDW_rs GPR32:$a, GPR32:$b, 0)>;
 
 // st c, [b] => st c, [b, 0]  — single-register store with implicit 0 offset
 def : InstAlias<"st\t$c, [$b]", (ST_rrs GPR32:$c, GPR32:$b, 0)>;
+def : InstAlias<"stb\t$c, [$b]", (STB_rrs GPR32:$c, GPR32:$b, 0)>;
+def : InstAlias<"stw\t$c, [$b]", (STW_rrs GPR32:$c, GPR32:$b, 0)>;
+
+// Hidden rss aliases: 2-operand form (after parser collapses duplicate imms).
+// These exist because the AsmMatcher can't parse "$shimm, $shimm" (tied operand
+// in AsmString). The parser detects "op reg, imm, imm" with equal imms and
+// collapses to "op reg, imm"; these aliases let the matcher find the rss def.
+// Priority 0 = never used for printing (the instruction's own AsmString handles that).
+def : InstAlias<"add\t$a, $shimm", (ADD_rss GPR32:$a, simm9:$shimm), 0>;
+def : InstAlias<"adc\t$a, $shimm", (ADC_rss GPR32:$a, simm9:$shimm), 0>;
+def : InstAlias<"sub\t$a, $shimm", (SUB_rss GPR32:$a, simm9:$shimm), 0>;
+def : InstAlias<"sbc\t$a, $shimm", (SBC_rss GPR32:$a, simm9:$shimm), 0>;
+def : InstAlias<"and\t$a, $shimm", (AND_rss GPR32:$a, simm9:$shimm), 0>;
+def : InstAlias<"or\t$a, $shimm",  (OR_rss  GPR32:$a, simm9:$shimm), 0>;
+def : InstAlias<"bic\t$a, $shimm", (BIC_rss GPR32:$a, simm9:$shimm), 0>;
+def : InstAlias<"xor\t$a, $shimm", (XOR_rss GPR32:$a, simm9:$shimm), 0>;

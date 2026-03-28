@@ -80,6 +80,17 @@ unsigned ARC4MCCodeEmitter::getBranchTargetOpValue(
   return 0;
 }
 
+/// Check whether the instruction has a shimm operand by looking for sentinel
+/// values 63 (SHIMM) or 61 (SHIMM_UPDATE) in the B or C register fields.
+/// Returns true if shimm is present, and sets BFieldIsShimm / CFieldIsShimm.
+static void detectShimmFields(uint32_t Value, bool &BFieldIsShimm,
+                              bool &CFieldIsShimm) {
+  unsigned B = (Value >> 15) & 0x3F;
+  unsigned C = (Value >> 9) & 0x3F;
+  BFieldIsShimm = (B == 63 || B == 61);
+  CFieldIsShimm = (C == 63 || C == 61);
+}
+
 void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
                                            SmallVectorImpl<char> &CB,
                                            SmallVectorImpl<MCFixup> &Fixups,
@@ -87,17 +98,78 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
   uint64_t Value = getBinaryCodeForInstr(Inst, Fixups, STI);
   ++MCNumEmitted;
 
+  const MCInstrDesc &Desc = MCII.get(Inst.getOpcode());
+  unsigned NumDefOps = Desc.getNumOperands();
+  unsigned NumInstOps = Inst.getNumOperands();
+
+  // Check for trailing annotation operands (condition code, flag, delay slot).
+  // These are appended by the AsmParser beyond the expected operand count.
+  // Convention: 3 trailing imm operands = [cc, flag, delay].
+  if (NumInstOps > NumDefOps && (NumInstOps - NumDefOps) == 3) {
+    int CC = Inst.getOperand(NumDefOps).getImm();
+    int Flag = Inst.getOperand(NumDefOps + 1).getImm();
+    int Delay = Inst.getOperand(NumDefOps + 2).getImm();
+
+    uint32_t V = static_cast<uint32_t>(Value);
+    unsigned Opcode5 = (V >> 27) & 0x1F;
+
+    // Apply condition code: bits [4:0].
+    // Only for non-shimm instructions (shimm uses bits [8:0] for the value).
+    if (CC != 0) {
+      bool BShimm, CShimm;
+      detectShimmFields(V, BShimm, CShimm);
+      if (!BShimm && !CShimm) {
+        // Safe to set condition code in bits [4:0].
+        V = (V & ~0x1FU) | (CC & 0x1F);
+      }
+    }
+
+    // Apply flag bit.
+    if (Flag != 0) {
+      bool BShimm, CShimm;
+      detectShimmFields(V, BShimm, CShimm);
+      if (BShimm || CShimm) {
+        // Shimm form: change sentinel 63->61 in the shimm field(s).
+        // Sentinel 63 = 0b111111, sentinel 61 = 0b111101.
+        if (CShimm) {
+          unsigned CField = (V >> 9) & 0x3F;
+          if (CField == 63) {
+            V &= ~(0x3FU << 9);
+            V |= (61U << 9);
+          }
+        }
+        if (BShimm) {
+          unsigned BField = (V >> 15) & 0x3F;
+          if (BField == 63) {
+            V &= ~(0x3FU << 15);
+            V |= (61U << 15);
+          }
+        }
+      } else {
+        // Non-shimm form: set bit 8.
+        V |= (1U << 8);
+      }
+    }
+
+    // Apply delay slot: bits [6:5]. Only for branch/jump opcodes (4-7).
+    if (Delay != 0 && Opcode5 >= 4 && Opcode5 <= 7) {
+      V = (V & ~(0x3U << 5)) | ((Delay & 0x3) << 5);
+    }
+
+    Value = V;
+  }
+
   // Emit the 32-bit instruction word (little-endian).
   support::endian::write<uint32_t>(CB, static_cast<uint32_t>(Value),
                                    llvm::endianness::little);
 
   // For 8-byte instructions (limm), emit the extra 32-bit limm word.
-  // Check the instruction size from the descriptor.
-  const MCInstrDesc &Desc = MCII.get(Inst.getOpcode());
   if (Desc.getSize() == 8) {
-    // The limm value is in an immediate operand. Find it.
+    // The limm value is in an immediate operand. Find it (among the real
+    // operands, not the trailing annotations).
     uint32_t LimmVal = 0;
-    for (unsigned I = 0, E = Inst.getNumOperands(); I < E; ++I) {
+    unsigned SearchEnd = (NumInstOps > NumDefOps) ? NumDefOps : NumInstOps;
+    for (unsigned I = 0; I < SearchEnd; ++I) {
       const MCOperand &MO = Inst.getOperand(I);
       if (MO.isImm()) {
         LimmVal = static_cast<uint32_t>(MO.getImm());

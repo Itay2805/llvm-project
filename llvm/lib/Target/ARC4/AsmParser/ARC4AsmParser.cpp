@@ -251,17 +251,45 @@ bool ARC4AsmParser::parseRegOrImm(OperandVector &Operands) {
   return true;
 }
 
+/// Map a condition code suffix to its 5-bit encoding value.
+/// Returns -1 if the suffix is not a recognized condition code.
+static int mapConditionCode(StringRef Suffix) {
+  return StringSwitch<int>(Suffix)
+      .Case("al", 0)
+      .Case("eq", 1).Case("z", 1)
+      .Case("ne", 2).Case("nz", 2)
+      .Case("pl", 3).Case("p", 3)
+      .Case("mi", 4).Case("n", 4)
+      .Case("cs", 5).Case("lo", 5).Case("c", 5)
+      .Case("cc", 6).Case("hs", 6).Case("nc", 6)
+      .Case("vs", 7).Case("v", 7)
+      .Case("vc", 8).Case("nv", 8)
+      .Case("gt", 9)
+      .Case("ge", 10)
+      .Case("lt", 11)
+      .Case("le", 12)
+      .Case("hi", 13)
+      .Case("ls", 14)
+      .Case("pnz", 15)
+      .Default(-1);
+}
+
 bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
                                      SMLoc NameLoc,
                                      OperandVector &Operands) {
   // Strip mnemonic suffixes.
   // Load/store size suffixes transform the mnemonic: ld.b -> ldb, st.w -> stw.
-  // Other suffixes (.f, .d, .nd, .jd, condition codes) are stripped for now.
-  StringRef BaseName = Name;
+  // .f, .q (condition codes), .d/.nd/.jd (delay slots) are recorded as
+  // trailing operands on the MCInst for the encoder to apply.
   SmallString<16> MnemonicBuf;
 
+  // Tracked suffix state.
+  int CondCode = 0;     // 5-bit condition code (0 = always)
+  int FlagBit = 0;      // 1 = .f suffix present
+  int DelaySlot = 0;    // 0=nd, 1=d, 2=jd
+
   // Process dot-separated suffixes from left to right.
-  StringRef Remaining = BaseName;
+  StringRef Remaining = Name;
   StringRef Mnemonic;
   std::tie(Mnemonic, Remaining) = Remaining.split('.');
 
@@ -277,20 +305,25 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
       continue;
     }
 
-    // Known suffixes to strip: flag (.f), delay slots (.d, .nd, .jd),
-    // sign extend (.x), address writeback (.a), cache bypass (.di),
-    // condition codes.
-    if (Suffix == "f" || Suffix == "d" || Suffix == "nd" || Suffix == "jd" ||
-        Suffix == "x" || Suffix == "a" || Suffix == "di" ||
-        // Condition codes:
-        Suffix == "eq" || Suffix == "ne" || Suffix == "lt" ||
-        Suffix == "gt" || Suffix == "le" || Suffix == "ge" ||
-        Suffix == "lo" || Suffix == "hs" || Suffix == "z" ||
-        Suffix == "nz" || Suffix == "p" || Suffix == "n" ||
-        Suffix == "c" || Suffix == "nc" || Suffix == "v" ||
-        Suffix == "nv" || Suffix == "pnz" || Suffix == "al" ||
-        Suffix == "hi") {
-      // Stripped — not wired up yet.
+    // Flag suffix.
+    if (Suffix == "f") {
+      FlagBit = 1;
+      continue;
+    }
+
+    // Delay slot suffixes.
+    if (Suffix == "nd") { DelaySlot = 0; continue; }
+    if (Suffix == "d")  { DelaySlot = 1; continue; }
+    if (Suffix == "jd") { DelaySlot = 2; continue; }
+
+    // Sign extend, writeback, cache bypass - strip for now.
+    if (Suffix == "x" || Suffix == "a" || Suffix == "di")
+      continue;
+
+    // Condition codes.
+    int CC = mapConditionCode(Suffix);
+    if (CC >= 0) {
+      CondCode = CC;
       continue;
     }
 
@@ -320,6 +353,68 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
   if (getLexer().isNot(AsmToken::EndOfStatement))
     return Error(getLexer().getLoc(), "unexpected token in operand list");
   getParser().Lex();
+
+  // Fix 5 (rss form): If we have pattern <mnemonic> <reg> <imm> <imm> where
+  // both immediates are equal and fit in 9 bits, collapse to <mnemonic> <reg>
+  // <imm> so the matcher finds the rss variant.
+  //
+  // The rss instruction's AsmString uses "$shimm, $shimm" (same operand twice),
+  // which the AsmMatcher can't handle for parsing. So we collapse duplicate
+  // trailing immediates here and match via hidden InstAliases in TableGen.
+  // Operands layout: [0]=token, [1]=reg, [2]=imm, [3]=imm
+  if (Operands.size() == 4) {
+    auto *Op1 = static_cast<ARC4Operand *>(Operands[1].get());
+    auto *Op2 = static_cast<ARC4Operand *>(Operands[2].get());
+    auto *Op3 = static_cast<ARC4Operand *>(Operands[3].get());
+    if (Op1->isReg() && Op2->isImm() && Op3->isImm()) {
+      const auto *CE2 = dyn_cast<MCConstantExpr>(Op2->Expr);
+      const auto *CE3 = dyn_cast<MCConstantExpr>(Op3->Expr);
+      if (CE2 && CE3 && CE2->getValue() == CE3->getValue()) {
+        int64_t Val = CE2->getValue();
+        if (Val >= -256 && Val <= 255) {
+          // Drop the duplicate trailing immediate.
+          Operands.pop_back();
+        }
+      }
+    }
+  }
+  // Also handle the discard form: <mnemonic> 0, <imm>, <imm>
+  // Operands: [0]=token, [1]=imm(0), [2]=imm, [3]=imm
+  if (Operands.size() == 4) {
+    auto *Op1 = static_cast<ARC4Operand *>(Operands[1].get());
+    auto *Op2 = static_cast<ARC4Operand *>(Operands[2].get());
+    auto *Op3 = static_cast<ARC4Operand *>(Operands[3].get());
+    if (Op1->isImm() && Op2->isImm() && Op3->isImm()) {
+      const auto *CE1 = dyn_cast<MCConstantExpr>(Op1->Expr);
+      const auto *CE2 = dyn_cast<MCConstantExpr>(Op2->Expr);
+      const auto *CE3 = dyn_cast<MCConstantExpr>(Op3->Expr);
+      if (CE1 && CE1->getValue() == 0 && CE2 && CE3 &&
+          CE2->getValue() == CE3->getValue()) {
+        int64_t Val = CE2->getValue();
+        if (Val >= -256 && Val <= 255) {
+          Operands.pop_back();
+        }
+      }
+    }
+  }
+
+  // Append trailing annotation operands for the MCCodeEmitter.
+  // Convention: condition code, flag bit, delay slot — in that order.
+  // Only append if any are non-default, to avoid bloating simple instructions.
+  if (CondCode != 0 || FlagBit != 0 || DelaySlot != 0) {
+    // We use ARC4Operand::createImm with MCConstantExpr to carry the values.
+    // These will become MCOperand::createImm in the MCInst.
+    // Marker: condition code
+    Operands.push_back(ARC4Operand::createImm(
+        MCConstantExpr::create(CondCode, getContext()), NameLoc, NameLoc));
+    // Marker: flag bit
+    Operands.push_back(ARC4Operand::createImm(
+        MCConstantExpr::create(FlagBit, getContext()), NameLoc, NameLoc));
+    // Marker: delay slot
+    Operands.push_back(ARC4Operand::createImm(
+        MCConstantExpr::create(DelaySlot, getContext()), NameLoc, NameLoc));
+  }
+
   return false;
 }
 
@@ -328,9 +423,52 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                             MCStreamer &Out,
                                             uint64_t &ErrorInfo,
                                             bool MatchingInlineAsm) {
+  // If trailing annotation operands were appended (.f, .q, delay slot),
+  // temporarily remove them so the matcher sees only real operands.
+  // The annotations are always the last 3 operands when present.
+  SmallVector<std::unique_ptr<MCParsedAsmOperand>, 3> Annotations;
+  bool HasAnnotations = false;
+
+  // Detect annotations: they are 3 trailing immediate operands added by
+  // parseInstruction when any suffix (.f, .q, delay slot) was present.
+  // Minimum layout: token + at least 0 real operands + 3 annotations = 4.
+  if (Operands.size() >= 4) {
+    size_t N = Operands.size();
+    auto *A1 = static_cast<ARC4Operand *>(Operands[N - 3].get());
+    auto *A2 = static_cast<ARC4Operand *>(Operands[N - 2].get());
+    auto *A3 = static_cast<ARC4Operand *>(Operands[N - 1].get());
+    // Annotations are immediates whose SMLoc matches the mnemonic (NameLoc).
+    // We check that all three are immediates and share the same start location
+    // (the mnemonic location set during parseInstruction).
+    if (A1->isImm() && A2->isImm() && A3->isImm() &&
+        A1->getStartLoc() == A2->getStartLoc() &&
+        A2->getStartLoc() == A3->getStartLoc() &&
+        A1->getStartLoc() == Operands[0]->getStartLoc()) {
+      HasAnnotations = true;
+      // Pop in reverse order.
+      Annotations.push_back(std::move(Operands[N - 1]));
+      Operands.pop_back();
+      Annotations.push_back(std::move(Operands[N - 2]));
+      Operands.pop_back();
+      Annotations.push_back(std::move(Operands[N - 3]));
+      Operands.pop_back();
+    }
+  }
+
   MCInst Inst;
   switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm)) {
   case Match_Success:
+    // Re-attach annotation operands to the MCInst for the encoder.
+    if (HasAnnotations) {
+      // Annotations were stored in reverse order: [delay, flag, cc].
+      // We want cc, flag, delay in the MCInst.
+      auto *CC = static_cast<ARC4Operand *>(Annotations[2].get());
+      auto *Flag = static_cast<ARC4Operand *>(Annotations[1].get());
+      auto *Delay = static_cast<ARC4Operand *>(Annotations[0].get());
+      CC->addImmOperands(Inst, 1);
+      Flag->addImmOperands(Inst, 1);
+      Delay->addImmOperands(Inst, 1);
+    }
     Out.emitInstruction(Inst, getSTI());
     return false;
   case Match_MissingFeature:
