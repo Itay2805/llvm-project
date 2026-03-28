@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 class ARC4Reg<bits<6> enc, string n, list<string> alt = []>
-    : Register<n> {
+    : Register<n>, DwarfRegNum<[enc]> {
   let HWEncoding{5-0} = enc;
   let AltNames = alt;
   let Namespace = "ARC4";
