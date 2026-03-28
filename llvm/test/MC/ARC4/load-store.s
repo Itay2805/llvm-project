@@ -1,7 +1,7 @@
 ; RUN: llvm-mc -triple=arc4-unknown-elf -show-encoding %s | FileCheck %s
 
-; Load and store instruction encoding tests
-; Note: ldb/ldw/stb/stw mnemonics are not implemented in ARC4; only ld/st exist.
+; Load and store instruction encoding tests (word size)
+; See size-variants.s for ldb/ldw/stb/stw tests.
 
 ; --- Load: reg+reg base (opcode-0 form) ---
 ; CHECK: ld	r0, [r1, r2]            ; encoding: [0x00,0x84,0x00,0x00]
