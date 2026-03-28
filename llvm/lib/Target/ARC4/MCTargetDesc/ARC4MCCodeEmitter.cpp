@@ -208,8 +208,15 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
         break;
       }
       if (MO.isImm()) {
-        support::endian::write<uint32_t>(
-            CB, static_cast<uint32_t>(MO.getImm()), llvm::endianness::little);
+        uint32_t LimmVal = static_cast<uint32_t>(MO.getImm());
+        // For jump instructions (opcode 7), the limm stores address >> 2
+        // (word-aligned, same format as status register — lower 2 bits
+        // not included).
+        unsigned Opc5 = (static_cast<uint32_t>(Value) >> 27) & 0x1F;
+        if (Opc5 == 7)
+          LimmVal >>= 2;
+        support::endian::write<uint32_t>(CB, LimmVal,
+                                          llvm::endianness::little);
         Emitted = true;
         break;
       }
