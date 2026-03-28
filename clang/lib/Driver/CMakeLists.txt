@@ -44,6 +44,7 @@ add_clang_library(clangDriver
   ToolChains/AIX.cpp
   ToolChains/AMDGPU.cpp
   ToolChains/AMDGPUOpenMP.cpp
+  ToolChains/ARC4.cpp
   ToolChains/AVR.cpp
   ToolChains/BareMetal.cpp
   ToolChains/Clang.cpp
