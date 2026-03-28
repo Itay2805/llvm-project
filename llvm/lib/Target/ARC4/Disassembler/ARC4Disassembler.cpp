@@ -563,38 +563,49 @@ static DecodeStatus decodeLD0(MCInst &Inst, uint32_t W, uint32_t Limm) {
   unsigned B = getFieldB(W);
   unsigned C = getFieldC(W);
   unsigned Z = (W >> 1) & 0x3;  // size bits [2:1]
+  unsigned X = W & 0x1;          // sign-extend bit [0]
+  unsigned WB = (W >> 3) & 0x1;  // writeback bit [3]
+  unsigned E = (W >> 5) & 0x1;   // cache bypass bit [5]
 
   if (Z > 2)
     return MCDisassembler::Fail;
   if (A > 31)
     return MCDisassembler::Fail;
 
-  const LD0Entry &E = LD0Table[Z];
+  const LD0Entry &Ent = LD0Table[Z];
 
   if (isLimmSentinel(C)) {
-    // ld a, [b, limm]
+    // ld a, [b, limm] — modifiers: x, w, e
     if (B > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Rl);
+    Inst.setOpcode(Ent.Rl);
     addReg(Inst, A);     // a
     addReg(Inst, B);     // b
     addImm(Inst, Limm);  // limm
+    addImm(Inst, X);     // x (sign-extend)
+    addImm(Inst, WB);    // w (writeback)
+    addImm(Inst, E);     // e (cache bypass)
   } else if (isLimmSentinel(B)) {
-    // ld a, [limm, c]
+    // ld a, [limm, c] — modifiers: x, e (no writeback)
     if (C > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Lr);
+    Inst.setOpcode(Ent.Lr);
     addReg(Inst, A);     // a
     addImm(Inst, Limm);  // limm
     addReg(Inst, C);     // c
+    addImm(Inst, X);     // x (sign-extend)
+    addImm(Inst, E);     // e (cache bypass)
   } else {
-    // ld a, [b, c]
+    // ld a, [b, c] — modifiers: x, w, e
     if (B > 31 || C > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Rr);
+    Inst.setOpcode(Ent.Rr);
     addReg(Inst, A);     // a
     addReg(Inst, B);     // b
     addReg(Inst, C);     // c
+    addImm(Inst, X);     // x (sign-extend)
+    addImm(Inst, WB);    // w (writeback)
+    addImm(Inst, E);     // e (cache bypass)
   }
   return MCDisassembler::Success;
 }
@@ -606,7 +617,10 @@ static DecodeStatus decodeLD0(MCInst &Inst, uint32_t W, uint32_t Limm) {
 static DecodeStatus decodeLD1(MCInst &Inst, uint32_t W, uint32_t Limm) {
   unsigned A = getFieldA(W);
   unsigned B = getFieldB(W);
-  unsigned Z = (W >> 10) & 0x3;  // size bits [11:10]
+  unsigned Z = (W >> 10) & 0x3;   // size bits [11:10]
+  unsigned X = (W >> 9) & 0x1;    // sign-extend bit [9]
+  unsigned WB = (W >> 12) & 0x1;  // writeback bit [12]
+  unsigned E = (W >> 14) & 0x1;   // cache bypass bit [14]
   int32_t Shimm = getShimm9(W);
 
   if (Z > 2)
@@ -614,26 +628,33 @@ static DecodeStatus decodeLD1(MCInst &Inst, uint32_t W, uint32_t Limm) {
   if (A > 31)
     return MCDisassembler::Fail;
 
-  const LD1Entry &E = LD1Table[Z];
+  const LD1Entry &Ent = LD1Table[Z];
 
   if (isLimmSentinel(B)) {
-    // ld a, [limm] (shimm=0 implied)
-    Inst.setOpcode(E.L);
+    // ld a, [limm] — modifiers: X, E (no writeback)
+    Inst.setOpcode(Ent.L);
     addReg(Inst, A);     // a
     addImm(Inst, Limm);  // limm
+    addImm(Inst, X);     // X (sign-extend)
+    addImm(Inst, E);     // E (cache bypass)
   } else if (isShimmSentinel(B)) {
-    // ld a, [shimm, shimm] (effective addr = 2*shimm)
-    Inst.setOpcode(E.Ss);
+    // ld a, [shimm, shimm] — modifiers: X, E (no writeback)
+    Inst.setOpcode(Ent.Ss);
     addReg(Inst, A);     // a
     addImm(Inst, Shimm); // shimm (ld_ss_addr, printer multiplies by 2)
+    addImm(Inst, X);     // X (sign-extend)
+    addImm(Inst, E);     // E (cache bypass)
   } else {
-    // ld a, [b, shimm]
+    // ld a, [b, shimm] — modifiers: X, W, E
     if (B > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Rs);
+    Inst.setOpcode(Ent.Rs);
     addReg(Inst, A);     // a
     addReg(Inst, B);     // b
     addImm(Inst, Shimm); // shimm offset
+    addImm(Inst, X);     // X (sign-extend)
+    addImm(Inst, WB);    // W (writeback)
+    addImm(Inst, E);     // E (cache bypass)
   }
   return MCDisassembler::Success;
 }
@@ -645,71 +666,87 @@ static DecodeStatus decodeLD1(MCInst &Inst, uint32_t W, uint32_t Limm) {
 static DecodeStatus decodeST(MCInst &Inst, uint32_t W, uint32_t Limm) {
   unsigned B = getFieldB(W);
   unsigned C = getFieldC(W);
-  unsigned Y = (W >> 22) & 0x3;  // size bits [23:22]
+  unsigned Y = (W >> 22) & 0x3;   // size bits [23:22]
+  unsigned V = (W >> 24) & 0x1;   // writeback bit [24]
+  unsigned D = (W >> 26) & 0x1;   // cache bypass bit [26]
   int32_t Offset = getShimm9(W);
 
   if (Y > 2)
     return MCDisassembler::Fail;
 
-  const STEntry &E = STTable[Y];
+  const STEntry &Ent = STTable[Y];
 
   bool BIsShimm = isShimmSentinel(B);
   bool BIsLimm = isLimmSentinel(B);
   bool CIsShimm = isShimmSentinel(C);
   bool CIsLimm = isLimmSentinel(C);
 
+  // Forms with register base get v (writeback) + D (cache bypass).
+  // Forms without register base get D (cache bypass) only.
+
   if (BIsLimm && CIsLimm) {
-    // st limm, [limm, offset]
-    Inst.setOpcode(E.Lls);
-    addImm(Inst, Limm);    // limm (both value and base)
+    // st limm, [limm, offset] — D only
+    Inst.setOpcode(Ent.Lls);
+    addImm(Inst, Limm);    // limm
     addImm(Inst, Offset);  // offset
+    addImm(Inst, D);       // D (cache bypass)
   } else if (BIsLimm && CIsShimm) {
-    // st shimm, [limm, offset]
-    Inst.setOpcode(E.Sls);
-    addImm(Inst, Limm);    // limm (base)
-    addImm(Inst, Offset);  // offset (= shimm value)
+    // st shimm, [limm, offset] — D only
+    Inst.setOpcode(Ent.Sls);
+    addImm(Inst, Limm);    // limm
+    addImm(Inst, Offset);  // offset
+    addImm(Inst, D);       // D
   } else if (BIsLimm) {
-    // st c, [limm, offset]
+    // st c, [limm, offset] — D only
     if (C > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Rls);
-    addReg(Inst, C);       // c (value)
-    addImm(Inst, Limm);    // limm (base)
+    Inst.setOpcode(Ent.Rls);
+    addReg(Inst, C);       // c
+    addImm(Inst, Limm);    // limm
     addImm(Inst, Offset);  // offset
+    addImm(Inst, D);       // D
   } else if (CIsLimm) {
-    // st limm, [b, offset]
+    // st limm, [b, offset] — v + D
     if (B > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Lrs);
-    addImm(Inst, Limm);    // limm (value)
-    addReg(Inst, B);       // b (base)
+    Inst.setOpcode(Ent.Lrs);
+    addImm(Inst, Limm);    // limm
+    addReg(Inst, B);       // b
     addImm(Inst, Offset);  // offset
+    addImm(Inst, V);       // v (writeback)
+    addImm(Inst, D);       // D (cache bypass)
   } else if (BIsShimm && CIsShimm) {
-    // st shimm, [shimm, offset]
-    Inst.setOpcode(E.Sss);
-    addImm(Inst, Offset);  // offset (= shimm value = base shimm)
+    // st shimm, [shimm, offset] — D only
+    Inst.setOpcode(Ent.Sss);
+    addImm(Inst, Offset);  // offset
+    addImm(Inst, D);       // D
   } else if (BIsShimm) {
-    // st c, [shimm, offset]
+    // st c, [shimm, offset] — D only
     if (C > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Rss);
-    addReg(Inst, C);       // c (value)
+    Inst.setOpcode(Ent.Rss);
+    addReg(Inst, C);       // c
     addImm(Inst, Offset);  // offset
+    addImm(Inst, D);       // D
   } else if (CIsShimm) {
-    // st shimm, [b, offset]
+    // st shimm, [b, offset] — v + D
     if (B > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Srs);
-    addImm(Inst, Offset);  // offset (= shimm value)
-    addReg(Inst, B);       // b (base)
+    Inst.setOpcode(Ent.Srs);
+    addImm(Inst, Offset);  // offset
+    addReg(Inst, B);       // b
+    addImm(Inst, V);       // v (writeback)
+    addImm(Inst, D);       // D (cache bypass)
   } else {
-    // st c, [b, offset]
+    // st c, [b, offset] — v + D
     if (B > 31 || C > 31)
       return MCDisassembler::Fail;
-    Inst.setOpcode(E.Rrs);
-    addReg(Inst, C);       // c (value)
-    addReg(Inst, B);       // b (base)
+    Inst.setOpcode(Ent.Rrs);
+    addReg(Inst, C);       // c
+    addReg(Inst, B);       // b
     addImm(Inst, Offset);  // offset
+    addImm(Inst, V);       // v (writeback)
+    addImm(Inst, D);       // D (cache bypass)
   }
   return MCDisassembler::Success;
 }

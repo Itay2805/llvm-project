@@ -227,8 +227,21 @@ void ARC4InstPrinter::printInst(const MCInst *MI, uint64_t Address,
     // Print to temp buffer, then inject suffix after the mnemonic.
     SmallString<128> Tmp;
     raw_svector_ostream TmpO(Tmp);
-    if (!printAliasInstr(MI, Address, TmpO))
+    bool IsAlias = printAliasInstr(MI, Address, TmpO);
+    if (!IsAlias)
       printInstruction(MI, Address, TmpO);
+
+    // Suppress redundant .f on aliases that inherently set flags.
+    // cmp = sub.f 0, rlc = adc.f — the alias name already implies .f.
+    if (IsAlias && Suffix.ends_with(".f")) {
+      StringRef S = Tmp.str();
+      size_t MnStart = S.find_first_not_of(" \t");
+      if (MnStart != StringRef::npos) {
+        StringRef Mn = S.substr(MnStart).split('\t').first;
+        if (Mn == "cmp" || Mn == "rlc")
+          Suffix.resize(Suffix.size() - 2); // remove ".f"
+      }
+    }
 
     StringRef S = Tmp.str();
     // Skip leading whitespace (tab indentation from printInstruction).
