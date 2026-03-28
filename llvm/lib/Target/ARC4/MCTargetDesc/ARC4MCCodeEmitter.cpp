@@ -60,9 +60,11 @@ unsigned ARC4MCCodeEmitter::getMachineOpValue(const MCInst &Inst,
   if (MO.isImm())
     return static_cast<unsigned>(MO.getImm());
 
+  // For expressions (symbol references), return 0 without creating a fixup.
+  // Branch targets are handled by getBranchTargetOpValue with proper fixup kind.
+  // Limm expressions will have their fixup created in encodeInstruction when
+  // the limm word is emitted at offset 4.
   assert(MO.isExpr());
-  Fixups.push_back(
-      MCFixup::create(0, MO.getExpr(), MCFixupKind(FK_Data_4)));
   return 0;
 }
 
@@ -73,10 +75,12 @@ unsigned ARC4MCCodeEmitter::getBranchTargetOpValue(
   if (MO.isImm())
     return static_cast<unsigned>(MO.getImm());
 
-  // For symbolic targets, emit a fixup.
+  // For symbolic targets, emit a PC-relative fixup.
+  // Branch offsets are word-aligned (lower 2 bits not stored).
   assert(MO.isExpr());
   Fixups.push_back(
-      MCFixup::create(0, MO.getExpr(), MCFixupKind(FK_Data_4)));
+      MCFixup::create(0, MO.getExpr(),
+                      MCFixupKind(ARC4::fixup_arc4_b22_pcrel)));
   return 0;
 }
 
@@ -181,20 +185,37 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
                                    llvm::endianness::little);
 
   // For 8-byte instructions (limm), emit the extra 32-bit limm word.
+  // The limm operand is always the first non-register operand in the MCInst
+  // (suffix operands f/q/n come after the limm in operand order).
   if (Desc.getSize() == 8) {
-    // The limm value is in an immediate operand. Find it among the operands.
-    // Skip suffix operands (f, q, n) which are also immediates — the limm
-    // is always among the first few operands (visible in AsmString).
-    uint32_t LimmVal = 0;
-    unsigned NumOps = Inst.getNumOperands();
-    for (unsigned I = 0; I < NumOps; ++I) {
+    bool Emitted = false;
+    for (unsigned I = 0, E = Inst.getNumOperands(); I < E; ++I) {
       const MCOperand &MO = Inst.getOperand(I);
+      if (MO.isReg())
+        continue;
+      if (MO.isExpr()) {
+        // Symbol reference — emit fixup at offset 4 (limm word position).
+        // For jump targets (j/jl limm), the limm stores address >> 2
+        // (word-aligned, status register format). Use fixup_arc4_b26.
+        // For data limm (ALU/load/store), full 32-bit value. Use FK_Data_4.
+        unsigned Opc5 = (static_cast<uint32_t>(Value) >> 27) & 0x1F;
+        MCFixupKind Kind = (Opc5 == 7) // opcode 7 = jump
+            ? MCFixupKind(ARC4::fixup_arc4_b26)
+            : MCFixupKind(FK_Data_4);
+        Fixups.push_back(MCFixup::create(4, MO.getExpr(), Kind));
+        support::endian::write<uint32_t>(CB, 0, llvm::endianness::little);
+        Emitted = true;
+        break;
+      }
       if (MO.isImm()) {
-        LimmVal = static_cast<uint32_t>(MO.getImm());
+        support::endian::write<uint32_t>(
+            CB, static_cast<uint32_t>(MO.getImm()), llvm::endianness::little);
+        Emitted = true;
         break;
       }
     }
-    support::endian::write<uint32_t>(CB, LimmVal, llvm::endianness::little);
+    if (!Emitted)
+      support::endian::write<uint32_t>(CB, 0, llvm::endianness::little);
   }
 }
 
