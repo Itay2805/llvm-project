@@ -44,6 +44,35 @@ public:
 } // end anonymous namespace
 
 void ARC4AsmPrinter::emitInstruction(const MachineInstr *MI) {
+  // Expand pseudo instructions.
+  switch (MI->getOpcode()) {
+  case ARC4::ADJCALLSTACKDOWN:
+  case ARC4::ADJCALLSTACKUP:
+    // These are codegen-only pseudos; don't emit anything.
+    return;
+  case ARC4::BRcc_rr: {
+    // BRcc_rr target, lhs, rhs, cc
+    // Expand to: CMP_rr lhs, rhs, 1, 0  +  B target, cc, 0
+    MCInst CmpInst;
+    CmpInst.setOpcode(ARC4::CMP_rr);
+    CmpInst.addOperand(MCInstLowering.LowerOperand(MI->getOperand(1))); // lhs
+    CmpInst.addOperand(MCInstLowering.LowerOperand(MI->getOperand(2))); // rhs
+    CmpInst.addOperand(MCOperand::createImm(1)); // f=1 (set flags)
+    CmpInst.addOperand(MCOperand::createImm(0)); // q=0 (always)
+    EmitToStreamer(*OutStreamer, CmpInst);
+
+    MCInst BrInst;
+    BrInst.setOpcode(ARC4::B);
+    BrInst.addOperand(MCInstLowering.LowerOperand(MI->getOperand(0))); // target
+    BrInst.addOperand(MCInstLowering.LowerOperand(MI->getOperand(3))); // cc
+    BrInst.addOperand(MCOperand::createImm(0)); // n=0
+    EmitToStreamer(*OutStreamer, BrInst);
+    return;
+  }
+  default:
+    break;
+  }
+
   MCInst TmpInst;
   MCInstLowering.Lower(MI, TmpInst);
   EmitToStreamer(*OutStreamer, TmpInst);

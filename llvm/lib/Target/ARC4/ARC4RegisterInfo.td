@@ -50,6 +50,10 @@ def BLINK  : ARC4Reg<31, "blink",  ["r31"]>;
 // Special registers
 def LP_COUNT : ARC4Reg<60, "lp_count">;
 
+// Status register (condition flags: Z, N, C, V). Not directly accessible
+// by general instructions, but needed to model flag dependencies.
+def STATUS32 : ARC4Reg<63, "status32">;
+
 // GPR32 - allocatable general purpose registers
 def GPR32 : RegisterClass<"ARC4", [i32], 32,
   (add R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12,

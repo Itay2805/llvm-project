@@ -66,6 +66,13 @@ def brtarget20 : Operand<OtherVT> {
   let ParserMatchClass = BrTarget20AsmOperand;
 }
 
+// Call target — same encoding as brtarget20 but typed i32 for DAG matching.
+def calltarget20 : Operand<i32> {
+  let EncoderMethod = "getBranchTargetOpValue";
+  let DecoderMethod = "decodeBranchTarget20";
+  let ParserMatchClass = BrTarget20AsmOperand;
+}
+
 // 9-bit signed store offset.
 def st_offset9 : Operand<i32> {
   let DecoderMethod = "decodeSimm9";
@@ -242,6 +249,9 @@ defm EXTW : SOP<0b001000, "extw">;
 //===----------------------------------------------------------------------===//
 
 let isBranch = 1, isTerminator = 1 in {
+  // Unconditional branch (q=0) and conditional branch (q!=0).
+  // When used conditionally, this reads STATUS32 flags.
+  let Uses = [STATUS32] in
   def B : ARC4InstBranch<0b00100,
     (outs), (ins brtarget20:$offset, i32imm:$q, i32imm:$n),
     "b\t$offset", []>;
@@ -572,4 +582,132 @@ def RET : ARC4InstJumpReg<0,
   let q = 0;
   let n = 0;
 }
+
+//===----------------------------------------------------------------------===//
+// DAG Selection Patterns — ALU register-register
+//===----------------------------------------------------------------------===//
+
+def : Pat<(add i32:$a, i32:$b), (ADD_rrr GPR32:$a, GPR32:$b, 0, 0)>;
+def : Pat<(sub i32:$a, i32:$b), (SUB_rrr GPR32:$a, GPR32:$b, 0, 0)>;
+def : Pat<(and i32:$a, i32:$b), (AND_rrr GPR32:$a, GPR32:$b, 0, 0)>;
+def : Pat<(or  i32:$a, i32:$b), (OR_rrr  GPR32:$a, GPR32:$b, 0, 0)>;
+def : Pat<(xor i32:$a, i32:$b), (XOR_rrr GPR32:$a, GPR32:$b, 0, 0)>;
+
+//===----------------------------------------------------------------------===//
+// DAG Selection Patterns — Load/Store
+//
+// Simple forms: load/store word through register with 0 offset.
+// LD_rs: (outs GPR32:$a), (ins GPR32:$b, ld_offset9:$shimm, X, W, E)
+// ST_rrs: (outs), (ins GPR32:$c, GPR32:$b, st_offset9:$offset, v, D)
+//===----------------------------------------------------------------------===//
+
+// Word load: ld a, [b, 0] — X=0 (no sign-ext), W=0 (no writeback), E=0 (no cache bypass)
+def : Pat<(i32 (load GPR32:$addr)),
+          (LD_rs GPR32:$addr, 0, 0, 0, 0)>;
+
+// Word store: st c, [b, 0] — v=0 (no writeback), D=0 (no cache bypass)
+def : Pat<(store i32:$val, GPR32:$addr),
+          (ST_rrs GPR32:$val, GPR32:$addr, 0, 0, 0)>;
+
+//===----------------------------------------------------------------------===//
+// Pseudo Instructions — Call Sequence Markers
+//===----------------------------------------------------------------------===//
+
+let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
+  def ADJCALLSTACKDOWN : ARC4Inst<(outs), (ins i32imm:$amt, i32imm:$amt2),
+                                  "# ADJCALLSTACKDOWN $amt, $amt2",
+                                  [(callseq_start timm:$amt, timm:$amt2)]> {
+    let isPseudo = 1;
+    let Inst{31-0} = 0;
+  }
+  def ADJCALLSTACKUP : ARC4Inst<(outs), (ins i32imm:$amt, i32imm:$amt2),
+                                "# ADJCALLSTACKUP $amt, $amt2",
+                                [(callseq_end timm:$amt, timm:$amt2)]> {
+    let isPseudo = 1;
+    let Inst{31-0} = 0;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// DAG Selection Patterns — Calls
+//
+// BL: direct call (20-bit PC-relative offset)
+// JL_r: indirect call through register
+//===----------------------------------------------------------------------===//
+
+let isCall = 1, Defs = [BLINK], Uses = [SP] in {
+  // Direct call — codegen pattern (with link)
+  def BL_call : ARC4InstBranch<0b00101,
+    (outs), (ins calltarget20:$offset, i32imm:$q, i32imm:$n),
+    "bl\t$offset",
+    []> {
+    let q = 0;
+    let n = 0;
+  }
+
+  // Indirect call through register — codegen pattern
+  def JL_call : ARC4InstJumpReg<1,
+    (outs), (ins GPR32:$b, i32imm:$f, i32imm:$q, i32imm:$n),
+    "jl\t[$b]",
+    []> {
+    let f = 0;
+    let q = 0;
+    let n = 0;
+  }
+}
+
+// Call patterns — use Pat<> to supply suffix defaults.
+def : Pat<(ARC4call tglobaladdr:$dst), (BL_call tglobaladdr:$dst, 0, 0)>;
+def : Pat<(ARC4call texternalsym:$dst), (BL_call texternalsym:$dst, 0, 0)>;
+def : Pat<(ARC4callind i32:$b), (JL_call GPR32:$b, 0, 0, 0)>;
+
+//===----------------------------------------------------------------------===//
+// DAG Selection Patterns — Compare and Branch
+//
+// CMP is sub.f 0, a, b (discard result, set flags).
+// Conditional branch: b<cc> target
+//===----------------------------------------------------------------------===//
+
+// CMP — compare two registers, set flags (sub.f 0, b, c).
+// Uses SUB_0rr encoding (discard result, f=1 to set flags).
+// The f and q operands are fixed for the codegen pattern.
+def ARC4cmp_frag : PatFrag<(ops node:$lhs, node:$rhs),
+                            (ARC4cmp node:$lhs, node:$rhs)>;
+
+let Defs = [STATUS32], hasSideEffects = 0, isCompare = 1 in
+def CMP_rr : ARC4InstALU3_rrr<0b01010,
+  (outs), (ins GPR32:$b, GPR32:$c, i32imm:$f, i32imm:$q),
+  "sub\t0, $b, $c", []> {
+  let a = 0b111101; // sentinel 61 = SHIMM_UPDATE (discard + flag)
+}
+
+def : Pat<(ARC4cmp_frag i32:$lhs, i32:$rhs),
+          (CMP_rr GPR32:$lhs, GPR32:$rhs, 1, 0)>;
+
+// BRcc pseudo — conditional branch based on condition code.
+// We use this as a pseudo instruction for DAG lowering. Expanded to
+// CMP_rr + conditional B in post-ISel or MCInstLower.
+let isBranch = 1, isTerminator = 1, hasSideEffects = 0, isPseudo = 1 in
+def BRcc_rr : ARC4Inst<
+  (outs), (ins brtarget20:$target, GPR32:$lhs, GPR32:$rhs, i32imm:$cc),
+  "brcc\t$target, $lhs, $rhs, $cc",
+  [(ARC4brcc bb:$target, i32:$lhs, i32:$rhs, (i32 imm:$cc))]> {
+  let Inst{31-0} = 0;
+}
+
+// SELECT_CC pseudo — conditional select.
+// Implemented as: cmp lhs, rhs / mov.cc dst, tval / mov.!cc dst, fval
+// Expanded in EmitInstrWithCustomInserter.
+let usesCustomInserter = 1, hasSideEffects = 0, isPseudo = 1,
+    Uses = [STATUS32] in
+def SELECT_CC : ARC4Inst<
+  (outs GPR32:$dst),
+  (ins GPR32:$tval, GPR32:$fval, i32imm:$cc),
+  "# SELECT_CC $dst, $tval, $fval, $cc",
+  [(set i32:$dst, (ARC4cmov i32:$tval, i32:$fval, (i32 imm:$cc)))]> {
+  let Inst{31-0} = 0;
+}
+
+// Unconditional branch pattern for BB targets.
+def : Pat<(br bb:$target), (B brtarget20:$target, 0, 0)>;
 

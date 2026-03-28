@@ -41,6 +41,7 @@ BitVector ARC4RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(ARC4::ILINK2);
   Reserved.set(ARC4::BLINK);
   Reserved.set(ARC4::FP);
+  Reserved.set(ARC4::STATUS32);
 
   return Reserved;
 }
