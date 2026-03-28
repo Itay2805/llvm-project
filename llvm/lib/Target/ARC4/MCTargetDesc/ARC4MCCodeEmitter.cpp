@@ -52,9 +52,13 @@ using namespace llvm;
 
 #define DEBUG_TYPE "mccodeemitter"
 
-// Fixup kind for 20-bit branch offset in L[21:2] field (bits[26:7]).
 enum ARC4FixupKind {
+  // 20-bit PC-relative branch offset in bits[26:7].
+  // Emitted as R_ARC_S21W_PCREL.
   FK_ARC4_Branch20 = llvm::FirstTargetFixupKind,
+  // Absolute j/jl limm target — only STATUS[25:2] is the PC.
+  // Emitted as R_ARC_32; LLD masks to bits [25:2] for ARC4.
+  FK_ARC4_JumpTarget,
 };
 
 namespace {
@@ -79,23 +83,31 @@ private:
   // TableGen assigns enum values 1..64 in order, so enc = reg_enum - 1.
   static uint32_t regEnc(const MCOperand &MO) { return MO.getReg() - 1; }
 
-  // Emit a 32-bit limm word (constant or fixup) and return it.
+  // Emit a 32-bit limm word (constant or fixup).
+  // For jump/call targets, IsJumpTarget=true masks the value to STATUS[25:2].
   void emitLimm(const MCOperand &Op, unsigned FixupOff,
                 SmallVectorImpl<MCFixup> &Fixups,
-                SmallVectorImpl<char> &CB) const;
+                SmallVectorImpl<char> &CB,
+                bool IsJumpTarget = false) const;
 };
 
 } // namespace
 
 void ARC4MCCodeEmitter::emitLimm(const MCOperand &Op, unsigned FixupOff,
                                   SmallVectorImpl<MCFixup> &Fixups,
-                                  SmallVectorImpl<char> &CB) const {
+                                  SmallVectorImpl<char> &CB,
+                                  bool IsJumpTarget) const {
   if (Op.isImm()) {
-    support::endian::write<uint32_t>(CB, (uint32_t)Op.getImm(),
-                                     llvm::endianness::little);
+    uint32_t Val = (uint32_t)Op.getImm();
+    if (IsJumpTarget)
+      Val = (Val >> 2) & 0x00FFFFFF; // R_ARC_B26: addr>>2 in bits[23:0]
+    support::endian::write<uint32_t>(CB, Val, llvm::endianness::little);
   } else {
     assert(Op.isExpr());
-    Fixups.push_back(MCFixup::create(FixupOff, Op.getExpr(), FK_Data_4));
+    MCFixupKind Kind = IsJumpTarget
+                           ? MCFixupKind(FK_ARC4_JumpTarget)
+                           : FK_Data_4;
+    Fixups.push_back(MCFixup::create(FixupOff, Op.getExpr(), Kind));
     support::endian::write<uint32_t>(CB, 0, llvm::endianness::little);
   }
 }
@@ -189,11 +201,13 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
     return;
   }
   // Call with limm target: JL [limm] (I=7, A=0, B=62, bit9=1)
-  // Per spec p98: JL is encoded as J except bit 9 is set to 1
+  // Per spec p98: JL is encoded as J except bit 9 is set to 1.
+  // The limm replaces STATUS[25:2] (the PC), so mask to those bits.
   if (Opc == ARC4::CG_CALLi) {
     uint32_t Word = (0x07u << 27) | (62u << 15) | (1u << 9);
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
-    emitLimm(MI.getOperand(0), /*FixupOff=*/4, Fixups, CB);
+    emitLimm(MI.getOperand(0), /*FixupOff=*/4, Fixups, CB,
+             /*IsJumpTarget=*/true);
     return;
   }
 
@@ -365,8 +379,10 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
     }
 
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
-    // Emit the limm word (4 bytes after the instruction word)
-    emitLimm(MI.getOperand(LImmIdx), /*FixupOff=*/4, Fixups, CB);
+    // Emit the limm word (4 bytes after the instruction word).
+    // Jump/call targets go into STATUS[25:2], so mask to those bits.
+    emitLimm(MI.getOperand(LImmIdx), /*FixupOff=*/4, Fixups, CB,
+             /*IsJumpTarget=*/isJump);
     return;
   }
 

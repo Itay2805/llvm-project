@@ -36,14 +36,15 @@ public:
 protected:
   unsigned getRelocType(const MCFixup &Fixup, const MCValue &Target,
                         bool IsPCRel) const override {
-    // We only define one target fixup: the 20-bit branch offset.
-    // All other fixups use generic FK_Data_N types.
     unsigned Kind = Fixup.getKind();
-    if (IsPCRel)
-      return ELF::R_ARC_32_PCREL; // closest ARC reloc for branch-range
-    switch (Kind) {
-    case FK_Data_4:
-      return ELF::R_ARC_32;
+    if (Kind == FK_Data_4)
+      return IsPCRel ? ELF::R_ARC_32_PCREL : ELF::R_ARC_32;
+    unsigned TargetKind = Kind - FirstTargetFixupKind;
+    switch (TargetKind) {
+    case 0: // FK_ARC4_Branch20 — 22-bit PC-relative branch (20 bits in insn)
+      return ELF::R_ARC_B22_PCREL;
+    case 1: // FK_ARC4_JumpTarget — 26-bit absolute j/jl limm
+      return ELF::R_ARC_B26;
     default:
       llvm_unreachable("Unhandled fixup kind");
     }
@@ -94,10 +95,10 @@ public:
 } // namespace
 
 MCFixupKindInfo ARC4AsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
-  // One target-specific fixup: 20-bit branch offset in bits[26:7]
   static const MCFixupKindInfo Infos[] = {
-      // name               offset bits flags
-      {"FK_ARC4_Branch20",  7,     20,  0},
+      // name                  offset bits flags
+      {"FK_ARC4_Branch20",     7,     20,  0},  // PC-relative branch
+      {"FK_ARC4_JumpTarget",   0,     32,  0},  // Absolute j/jl limm target
   };
   if (Kind < FirstTargetFixupKind)
     return MCAsmBackend::getFixupKindInfo(Kind);
@@ -124,16 +125,29 @@ void ARC4AsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
     return;
   }
 
-  // FK_ARC4_Branch20: 20-bit PC-relative offset in bits[26:7]
-  // The fixup expression already includes the -4 PC+4 adjustment
-  // (baked into the MCExpr by the code emitter), so Value is the
-  // final byte offset from the delay slot. Encode as word offset.
-  if ((unsigned)Kind == FirstTargetFixupKind) {
-    uint32_t L = (uint32_t)(((int64_t)Value >> 2) & 0xFFFFF);
+  unsigned TargetKind = Kind - FirstTargetFixupKind;
+
+  // FK_ARC4_Branch20 → R_ARC_B22_PCREL
+  // 20-bit word offset in instruction bits[26:7].
+  // The fixup expression already includes the -4 PC+4 adjustment.
+  if (TargetKind == 0) {
     uint32_t Word;
     memcpy(&Word, Data, 4);
-    Word = (Word & ~(0xFFFFFu << 7)) | (L << 7);
+    uint32_t Enc = (uint32_t)(((int64_t)Value >> 2) & 0xFFFFF);
+    Word = (Word & 0xF800007Fu) | (Enc << 7);
     support::endian::write<uint32_t>(Data, Word, llvm::endianness::little);
+    return;
+  }
+
+  // FK_ARC4_JumpTarget → R_ARC_B26
+  // Absolute 26-bit j/jl target.  (value >> 2) installed into bits [23:0]
+  // of the limm word; bits [31:24] preserved (jump flags / reserved).
+  if (TargetKind == 1) {
+    uint32_t Word;
+    memcpy(&Word, Data, 4);
+    Word = (Word & 0xFF000000u) | (((uint32_t)(Value >> 2)) & 0x00FFFFFFu);
+    support::endian::write<uint32_t>(Data, Word, llvm::endianness::little);
+    return;
   }
 }
 
