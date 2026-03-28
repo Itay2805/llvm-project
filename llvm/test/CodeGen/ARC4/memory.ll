@@ -5,7 +5,7 @@
 define void @store(ptr %p, i32 %v) {
 ; CHECK-LABEL: store:
 ; CHECK: st r1, [r0
-; CHECK: j [r31]
+; CHECK: j [blink]
   store i32 %v, ptr %p
   ret void
 }
@@ -13,17 +13,17 @@ define void @store(ptr %p, i32 %v) {
 define i32 @load(ptr %p) {
 ; CHECK-LABEL: load:
 ; CHECK: ld r0, [r0
-; CHECK: j [r31]
+; CHECK: j [blink]
   %v = load i32, ptr %p
   ret i32 %v
 }
 
 define i32 @stack_frame(i32 %a, i32 %b) {
 ; CHECK-LABEL: stack_frame:
-; CHECK: sub r28, r28
+; CHECK: sub sp, sp
 ; CHECK: st
-; CHECK: add r28, r28
-; CHECK: j [r31]
+; CHECK: add sp, sp
+; CHECK: j [blink]
   %a.addr = alloca i32
   %b.addr = alloca i32
   store i32 %a, ptr %a.addr

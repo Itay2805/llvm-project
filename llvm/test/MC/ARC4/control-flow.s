@@ -46,8 +46,8 @@ forward:
 ; Jump register: j [reg]
 ; ============================================================
 
-; CHECK: j	[r31] ; encoding: [0x00,0x80,0x0f,0x38]
-j [r31]
+; CHECK: j	[blink] ; encoding: [0x00,0x80,0x0f,0x38]
+j [blink]
 ; CHECK: jl	[r10] ; encoding: [0x00,0x02,0x05,0x38]
 jl [r10]
 

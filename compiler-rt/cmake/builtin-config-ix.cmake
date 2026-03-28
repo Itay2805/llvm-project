@@ -99,6 +99,7 @@ set(SPARCV9 sparcv9)
 set(WASM32 wasm32)
 set(WASM64 wasm64)
 set(VE ve)
+set(ARC4 arc4)
 set(M68K m68k)
 
 if(APPLE)
@@ -108,7 +109,7 @@ if(APPLE)
 endif()
 
 set(ALL_BUILTIN_SUPPORTED_ARCH
-  ${X86} ${X86_64} ${AMDGPU} ${ARM32} ${ARM64} ${AVR}
+  ${X86} ${X86_64} ${AMDGPU} ${ARM32} ${ARM64} ${ARC4} ${AVR}
   ${HEXAGON} ${MIPS32} ${MIPS64} ${NVPTX} ${PPC32} ${PPC64}
   ${RISCV32} ${RISCV64} ${S390X} ${SPARC} ${SPARCV9}
   ${WASM32} ${WASM64} ${VE} ${LOONGARCH64} ${M68K})

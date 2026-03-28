@@ -5,7 +5,7 @@
 define i32 @max(i32 %a, i32 %b) {
 ; CHECK-LABEL: max:
 ; CHECK: b.gt
-; CHECK: j [r31]
+; CHECK: j [blink]
   %cmp = icmp sgt i32 %a, %b
   %r = select i1 %cmp, i32 %a, i32 %b
   ret i32 %r
@@ -14,7 +14,7 @@ define i32 @max(i32 %a, i32 %b) {
 define i32 @if_else(i32 %a) {
 ; CHECK-LABEL: if_else:
 ; CHECK: b.{{gt|lt|le|ge}}
-; CHECK: j [r31]
+; CHECK: j [blink]
   %cmp = icmp sgt i32 %a, 0
   br i1 %cmp, label %then, label %else
 
@@ -28,7 +28,7 @@ else:
 define i32 @eq_test(i32 %a, i32 %b) {
 ; CHECK-LABEL: eq_test:
 ; CHECK: b.eq
-; CHECK: j [r31]
+; CHECK: j [blink]
   %cmp = icmp eq i32 %a, %b
   %r = select i1 %cmp, i32 1, i32 0
   ret i32 %r
@@ -42,7 +42,7 @@ define i32 @while_loop(i32 %n) {
 ; LOOP: sub.f
 ; LOOP: b.lt
 ; LOOP: b
-; LOOP: j [r31]
+; LOOP: j [blink]
 entry:
   %n.addr = alloca i32
   %s = alloca i32

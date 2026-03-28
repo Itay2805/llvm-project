@@ -884,6 +884,25 @@ set(ve_SOURCES
 
 set(m68k_SOURCES ${GENERIC_SOURCES})
 
+set(arc4_SOURCES
+  arc4/mulsi3.S
+  arc4/divsi3.S
+  arc4/udivsi3.S
+  arc4/modsi3.S
+  arc4/umodsi3.S
+  arc4/divmodsi4.S
+  arc4/udivmodsi4.S
+  arc4/ashlsi3.S
+  arc4/ashrsi3.S
+  arc4/lshrsi3.S
+  arc4/muldi3.S
+  arc4/divdi3.S
+  arc4/udivdi3.S
+  arc4/cmpsi2.S
+  arc4/ucmpsi2.S
+  ${GENERIC_SOURCES}
+)
+
 add_custom_target(builtins)
 set_target_properties(builtins PROPERTIES FOLDER "Compiler-RT/Metatargets")
 

@@ -13,15 +13,19 @@ class ARC4Reg<bits<6> enc, string n, list<string> altNames = []>
   let HWEncoding{5-0} = enc;
 }
 
-// General-purpose registers r0–r28
-foreach i = 0-28 in {
+// General-purpose registers r0–r26
+foreach i = 0-26 in {
   def R#i : ARC4Reg<i, "r"#i>, DwarfRegNum<[i]>;
 }
 
+// r27 = frame pointer, r28 = stack pointer
+def R27 : ARC4Reg<27, "fp", ["r27"]>, DwarfRegNum<[27]>;
+def R28 : ARC4Reg<28, "sp", ["r28"]>, DwarfRegNum<[28]>;
+
 // r29–r31: aliased link/branch registers
-def R29 : ARC4Reg<29, "r29", ["ilink1"]>, DwarfRegNum<[29]>;
-def R30 : ARC4Reg<30, "r30", ["ilink2"]>, DwarfRegNum<[30]>;
-def R31 : ARC4Reg<31, "r31", ["blink"]>,  DwarfRegNum<[31]>;
+def R29 : ARC4Reg<29, "ilink1", ["r29"]>, DwarfRegNum<[29]>;
+def R30 : ARC4Reg<30, "ilink2", ["r30"]>, DwarfRegNum<[30]>;
+def R31 : ARC4Reg<31, "blink",  ["r31"]>, DwarfRegNum<[31]>;
 
 // r32–r59: extension registers (defined but not user-visible in asm)
 foreach i = 32-59 in {

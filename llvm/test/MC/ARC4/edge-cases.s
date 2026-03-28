@@ -18,9 +18,9 @@ add r1, r2, 256
 ; Special/named registers: ilink1(r29), ilink2(r30), blink(r31), lp_count(r60)
 ; ============================================================
 
-; CHECK: add	r29, r1, r2 ; encoding: [0x00,0x84,0xa0,0x43]
+; CHECK: add	ilink1, r1, r2 ; encoding: [0x00,0x84,0xa0,0x43]
 add ilink1, r1, r2
-; CHECK: add	r1, r31, r2 ; encoding: [0x00,0x84,0x2f,0x40]
+; CHECK: add	r1, blink, r2 ; encoding: [0x00,0x84,0x2f,0x40]
 add r1, blink, r2
 ; CHECK: add	lp_count, r1, r2 ; encoding: [0x00,0x84,0x80,0x47]
 add lp_count, r1, r2
@@ -77,5 +77,5 @@ lp_end:
 ; Function return pattern: j [blink]
 ; ============================================================
 
-; CHECK: j	[r31] ; encoding: [0x00,0x80,0x0f,0x38]
-j [r31]
+; CHECK: j	[blink] ; encoding: [0x00,0x80,0x0f,0x38]
+j [blink]

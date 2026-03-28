@@ -125,6 +125,44 @@ public:
 } // namespace
 
 // ---------------------------------------------------------------------------
+// Condition code string → Q-field encoding
+// ---------------------------------------------------------------------------
+
+// Returns the ARC4 Q-field value for a condition code name, or 0 if unknown.
+// 0 means "always" (unconditional), so it doubles as "no match" since we
+// only call this when we already saw a dot-suffix.
+static unsigned parseCondCode(StringRef CC) {
+  return StringSwitch<unsigned>(CC.lower())
+      .Case("al", 0)   // always (explicit)
+      .Case("eq", 1)   // equal / zero
+      .Case("z",  1)   // synonym
+      .Case("ne", 2)   // not equal / nonzero
+      .Case("nz", 2)   // synonym
+      .Case("p",  3)   // positive (N=0)
+      .Case("pl", 3)   // synonym
+      .Case("n",  4)   // negative (N=1)
+      .Case("mi", 4)   // synonym
+      .Case("lo", 5)   // unsigned < (carry set)
+      .Case("cs", 5)   // synonym
+      .Case("c",  5)   // synonym
+      .Case("hs", 6)   // unsigned >= (carry clear)
+      .Case("cc", 6)   // synonym
+      .Case("nc", 6)   // synonym
+      .Case("v",  7)   // overflow set
+      .Case("vs", 7)   // synonym
+      .Case("nv", 8)   // overflow clear
+      .Case("vc", 8)   // synonym
+      .Case("gt", 9)   // signed >
+      .Case("ge", 10)  // signed >=
+      .Case("lt", 11)  // signed <
+      .Case("le", 12)  // signed <=
+      .Case("hi", 13)  // unsigned >
+      .Case("ls", 14)  // unsigned <=
+      .Case("pnz", 15) // positive nonzero
+      .Default(~0u);
+}
+
+// ---------------------------------------------------------------------------
 // Parser class
 // ---------------------------------------------------------------------------
 namespace {
@@ -132,6 +170,11 @@ namespace {
 class ARC4AsmParser : public MCTargetAsmParser {
   const MCRegisterInfo *MRI;
   MCAsmParser &Parser;
+
+  // Parsed from mnemonic suffixes (e.g. sub.f.ne → ParsedF=1, ParsedQ=2)
+  unsigned ParsedF = 0;  // 1 if .f suffix present
+  unsigned ParsedQ = 0;  // condition code value, 0 = unconditional
+  unsigned ParsedD = 0;  // 1 if .d (delay slot) suffix present
 
   MCAsmParser &getParser() const { return Parser; }
   AsmLexer    &getLexer()  const { return Parser.getLexer(); }
@@ -159,6 +202,10 @@ class ARC4AsmParser : public MCTargetAsmParser {
 
   /// Parse a single non-bracket operand (register or immediate/expression).
   bool parseOperand(OperandVector &Operands);
+
+  /// After a successful instruction match, patch the F/SetFlags and Q operands
+  /// with values parsed from the mnemonic suffixes.
+  void patchFlagAndCondCode(MCInst &Inst) const;
 
 public:
   ARC4AsmParser(const MCSubtargetInfo &STI, MCAsmParser &P,
@@ -236,8 +283,52 @@ bool ARC4AsmParser::parseOperand(OperandVector &Operands) {
 
 bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
                                       SMLoc NameLoc, OperandVector &Operands) {
-  // Mnemonic token
-  Operands.push_back(ARC4Operand::createToken(Name, NameLoc));
+  // Reset suffix state for this instruction.
+  ParsedF = 0;
+  ParsedQ = 0;
+  ParsedD = 0;
+
+  // The MC lexer treats '.' as an identifier character, so "sub.f.ne"
+  // arrives as a single token.  Split suffixes out of the Name string.
+  StringRef BaseMnemonic = Name;
+  StringRef Rest;
+
+  size_t DotPos = Name.find('.');
+  if (DotPos != StringRef::npos) {
+    BaseMnemonic = Name.substr(0, DotPos);
+    Rest = Name.substr(DotPos + 1);
+  }
+
+  // Parse each dot-separated suffix:
+  //   .f  — flag-set (F/SetFlags bit)
+  //   .d  — delay slot (NN=1)
+  //   .cc — condition code (Q field)
+  while (!Rest.empty()) {
+    StringRef Part;
+    size_t NextDot = Rest.find('.');
+    if (NextDot != StringRef::npos) {
+      Part = Rest.substr(0, NextDot);
+      Rest = Rest.substr(NextDot + 1);
+    } else {
+      Part = Rest;
+      Rest = StringRef();
+    }
+
+    if (Part.equals_insensitive("f")) {
+      ParsedF = 1;
+    } else if (Part.equals_insensitive("d")) {
+      ParsedD = 1;
+    } else if (Part.equals_insensitive("jd")) {
+      ParsedD = 2; // NN=2: delay slot executes only if branch taken
+    } else {
+      unsigned CC = parseCondCode(Part);
+      if (CC != ~0u)
+        ParsedQ = CC;
+    }
+  }
+
+  // Push the base mnemonic (without suffixes) as the token for matching.
+  Operands.push_back(ARC4Operand::createToken(BaseMnemonic, NameLoc));
 
   // No operands
   if (getLexer().is(AsmToken::EndOfStatement)) {
@@ -293,6 +384,66 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
 }
 
 // ---------------------------------------------------------------------------
+// Patch F/SetFlags and Q operands after instruction match
+// ---------------------------------------------------------------------------
+
+void ARC4AsmParser::patchFlagAndCondCode(MCInst &Inst) const {
+  if (!ParsedF && !ParsedQ && !ParsedD)
+    return;
+
+  const MCInstrDesc &Desc = MII.get(Inst.getOpcode());
+  uint64_t TSF = Desc.TSFlags;
+  uint32_t Fmt = (TSF >> 5) & 0x3;
+  uint32_t Arc4Op = TSF & 0x1F;
+  unsigned NumOps = Inst.getNumOperands();
+
+  if (NumOps < 2)
+    return; // too few operands to have F, NN, or Q
+
+  // Operand layout reference (trailing encoding-only operands):
+  //
+  //   BranchFmt (3):       ..., NN, Q
+  //   ShimmFmt  (1):       ..., SetFlags, NN
+  //   RegFmt/LimmFmt (0/2):
+  //     Single-op (0x03):  ..., F, Q          (no NN)
+  //     ALU/Jump:          ..., F, NN, Q
+
+  switch (Fmt) {
+  case 3: // BranchFmt: Target, NN, Q
+    if (ParsedQ && NumOps >= 1)
+      Inst.getOperand(NumOps - 1).setImm(ParsedQ);
+    if (ParsedD && NumOps >= 2)
+      Inst.getOperand(NumOps - 2).setImm(ParsedD);
+    break;
+
+  case 1: // ShimmFmt: ..., SetFlags, NN
+    if (ParsedF && NumOps >= 2)
+      Inst.getOperand(NumOps - 2).setImm(ParsedF);
+    if (ParsedD && NumOps >= 1)
+      Inst.getOperand(NumOps - 1).setImm(ParsedD);
+    break;
+
+  default: // RegFmt (0) or LimmFmt (2): ..., F, [NN,] Q
+    // Q is always the last operand.
+    if (ParsedQ && NumOps >= 1)
+      Inst.getOperand(NumOps - 1).setImm(ParsedQ);
+
+    if (Arc4Op == 0x03) {
+      // Single-operand: ..., F, Q  (no NN field)
+      if (ParsedF && NumOps >= 2)
+        Inst.getOperand(NumOps - 2).setImm(ParsedF);
+    } else {
+      // ALU / Jump: ..., F, NN, Q
+      if (ParsedF && NumOps >= 3)
+        Inst.getOperand(NumOps - 3).setImm(ParsedF);
+      if (ParsedD && NumOps >= 2)
+        Inst.getOperand(NumOps - 2).setImm(ParsedD);
+    }
+    break;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Match and emit
 // ---------------------------------------------------------------------------
 
@@ -314,6 +465,9 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     unsigned Expected = Desc.getNumOperands();
     while (Inst.getNumOperands() < Expected)
       Inst.addOperand(MCOperand::createImm(0));
+
+    // Patch F and Q from any .f / .cc mnemonic suffixes.
+    patchFlagAndCondCode(Inst);
 
     Inst.setLoc(IDLoc);
     Out.emitInstruction(Inst, *STI);

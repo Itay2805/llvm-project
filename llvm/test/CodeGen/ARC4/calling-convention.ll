@@ -5,14 +5,14 @@
 define i32 @return_arg0(i32 %a, i32 %b) {
 ; CHECK-LABEL: return_arg0:
 ; CHECK-NOT: add
-; CHECK: j [r31]
+; CHECK: j [blink]
   ret i32 %a
 }
 
 define i32 @return_arg1(i32 %a, i32 %b) {
 ; CHECK-LABEL: return_arg1:
 ; CHECK: and r0, r1, r1
-; CHECK-NEXT: j [r31]
+; CHECK-NEXT: j [blink]
   ret i32 %b
 }
 
@@ -21,7 +21,7 @@ define i32 @eight_args(i32 %a, i32 %b, i32 %c, i32 %d,
                        i32 %e, i32 %f, i32 %g, i32 %h) {
 ; CHECK-LABEL: eight_args:
 ; CHECK: add
-; CHECK: j [r31]
+; CHECK: j [blink]
   %s1 = add i32 %a, %b
   %s2 = add i32 %c, %d
   %s3 = add i32 %e, %f
@@ -38,7 +38,7 @@ declare i32 @external(i32, i32)
 define i32 @call_extern(i32 %a, i32 %b) {
 ; CHECK-LABEL: call_extern:
 ; CHECK: jl external
-; CHECK: j [r31]
+; CHECK: j [blink]
   %r = call i32 @external(i32 %a, i32 %b)
   ret i32 %r
 }

@@ -61,13 +61,19 @@ void ARC4InstPrinter::printImm(const MCInst *MI, unsigned OpNum,
   MAI.printExpr(O, *Op.getExpr());
 }
 
-// NN (delay-slot mode) operand: normally 0 (no delay slot), not printed in
-// standard assembly output. Provided in case AsmString ever references $NN.
+// NN (delay-slot mode) operand:
+//   0 = no delay slot (nothing printed)
+//   1 = .d  — delay slot, instruction always executes
+//   2 = .jd — jump delayed, delay slot executes only if branch taken
 void ARC4InstPrinter::printDelaySlot(const MCInst *MI, unsigned OpNum,
                                       raw_ostream &O) {
   int64_t V = MI->getOperand(OpNum).getImm();
-  if (V != 0)
+  if (V == 1)
     O << ".d";
+  else if (V == 2)
+    O << ".jd";
+  else if (V != 0)
+    O << ".d"; // fallback for unknown non-zero values
 }
 
 // Q (condition code) operand: 0 = always (no suffix printed).
