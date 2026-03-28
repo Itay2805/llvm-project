@@ -7,15 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "ARC4ISelLowering.h"
-#include "ARC4MachineFunctionInfo.h"
 #include "ARC4Subtarget.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
-#include "llvm/IR/Function.h"
 
 using namespace llvm;
 
@@ -55,9 +52,11 @@ ARC4TargetLowering::ARC4TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::GlobalAddress, MVT::i32, Custom);
 
   // Shifts: ARC4 has no barrel shifter (only shift-by-1 ASR/LSR).
-  // Use Expand to generate shift loops, or LibCall if available.
-  // For now, leave as Legal and let ISel handle constant shifts
-  // via repeated shift-by-1, and variable shifts via libcall.
+  // Custom lowering: constant shifts → repeated shift-by-1 in DAG,
+  // variable shifts → library calls (__ashlsi3, __lshrsi3, __ashrsi3).
+  setOperationAction(ISD::SHL, MVT::i32, Custom);
+  setOperationAction(ISD::SRL, MVT::i32, Custom);
+  setOperationAction(ISD::SRA, MVT::i32, Custom);
 
   // Sign/zero extend loads
   setLoadExtAction(ISD::SEXTLOAD, MVT::i32, MVT::i8, Expand);
@@ -92,6 +91,10 @@ SDValue ARC4TargetLowering::LowerOperation(SDValue Op,
     return LowerSELECT_CC(Op, DAG);
   case ISD::SELECT:
     return LowerSELECT(Op, DAG);
+  case ISD::SHL:
+  case ISD::SRL:
+  case ISD::SRA:
+    return LowerShift(Op, DAG);
   case ISD::GlobalAddress:
     return LowerGlobalAddress(Op, DAG);
   default:
@@ -106,6 +109,8 @@ const char *ARC4TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARC4ISD::CMP:      return "ARC4ISD::CMP";
   case ARC4ISD::BR_CC:      return "ARC4ISD::BR_CC";
   case ARC4ISD::SELECT_CC:  return "ARC4ISD::SELECT_CC";
+  case ARC4ISD::ASR1:       return "ARC4ISD::ASR1";
+  case ARC4ISD::LSR1:       return "ARC4ISD::LSR1";
   default:                  return nullptr;
   }
 }
@@ -344,21 +349,42 @@ SDValue ARC4TargetLowering::LowerSELECT(SDValue Op,
 
 SDValue ARC4TargetLowering::LowerShift(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
-  SDValue LHS = Op.getOperand(0);
-  SDValue RHS = Op.getOperand(1);
+  SDValue Src = Op.getOperand(0);
+  SDValue Amt = Op.getOperand(1);
+  unsigned Opc = Op.getOpcode();
 
-  // Map shift opcode to runtime library function
+  // Constant shift: expand to repeated shift-by-1 operations.
+  if (auto *AmtC = dyn_cast<ConstantSDNode>(Amt)) {
+    unsigned N = AmtC->getZExtValue() & 31;
+    if (N == 0)
+      return Src;
+
+    SDValue Result = Src;
+    for (unsigned I = 0; I < N; I++) {
+      if (Opc == ISD::SHL) {
+        // SHL by 1 = ADD a, a
+        Result = DAG.getNode(ISD::ADD, DL, MVT::i32, Result, Result);
+      } else if (Opc == ISD::SRA) {
+        // ASR by 1 — use target-specific node
+        Result = DAG.getNode(ARC4ISD::ASR1, DL, MVT::i32, Result);
+      } else {
+        // LSR by 1 — use target-specific node
+        Result = DAG.getNode(ARC4ISD::LSR1, DL, MVT::i32, Result);
+      }
+    }
+    return Result;
+  }
+
+  // Variable shift: emit a library call.
   RTLIB::Libcall LC;
-  switch (Op.getOpcode()) {
+  switch (Opc) {
   case ISD::SHL: LC = RTLIB::SHL_I32; break;
   case ISD::SRL: LC = RTLIB::SRL_I32; break;
   case ISD::SRA: LC = RTLIB::SRA_I32; break;
-  default: llvm_unreachable("unexpected shift opcode");
+  default: llvm_unreachable("unexpected shift");
   }
-
-  // Emit a library call: result = __ashlsi3(lhs, rhs) etc.
-  TargetLowering::MakeLibCallOptions CallOptions;
-  SDValue Args[] = {LHS, RHS};
+  MakeLibCallOptions CallOptions;
+  SDValue Args[] = {Src, Amt};
   auto Call = makeLibCall(DAG, LC, MVT::i32, Args, CallOptions, DL);
   return Call.first;
 }

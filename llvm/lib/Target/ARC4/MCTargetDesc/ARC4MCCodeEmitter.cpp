@@ -30,7 +30,7 @@
 //   [4:0]  5-bit ARC4 opcode
 //   [6:5]  format: 0=Reg, 1=Shimm, 2=Limm, 3=Branch
 //   [11:7] single-operand sub-opcode (C field, opcode 0x03)
-//   [12]   isJL  (jump-and-link: A=31)
+//   [12]   isJL  (jump-and-link: bit 9 = 1 per spec p98)
 //   [13]   BRK/SLEEP B field (0,1,2); for SWI uses [14:13]=2
 //   [13:12] ZZ bits for load/store (00=32, 01=byte, 10=word)
 //   [14]   X bit (sign-extend for loads)
@@ -106,29 +106,31 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
                                            const MCSubtargetInfo &STI) const {
   unsigned Opc = MI.getOpcode();
 
-  // Handle codegen-only MOV pseudo-instructions directly.
-  // These bypass the normal format dispatch since they need special encoding.
+  // ---------------------------------------------------------------
+  // Codegen-only instructions that need special encoding.
+  // The MCInstLower translates most CG_ instructions to their MC
+  // equivalents, but these few need custom encoding because their
+  // operand layout doesn't match any MC instruction format exactly.
+  // ---------------------------------------------------------------
+
+  // MOV shimm: AND dst, shimm, shimm (B=63, C=63 sentinels)
   if (Opc == ARC4::CG_MOVri) {
-    // MOV dst, shimm → AND dst, shimm, shimm (shimms match)
-    // Encoding: I=0x0C(AND), A=dst, B=63(shimm-no-flag), C=63, D=value
     uint32_t A = regEnc(MI.getOperand(0));
     uint32_t D = (uint32_t)MI.getOperand(1).getImm() & 0x1FF;
     uint32_t Word = (0x0Cu << 27) | (A << 21) | (63u << 15) | (63u << 9) | D;
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     return;
   }
+  // MOV limm: AND dst, limm (B=62, C=62)
   if (Opc == ARC4::CG_MOVli) {
-    // MOV dst, limm → AND dst, limm (B=62, C=62)
     uint32_t A = regEnc(MI.getOperand(0));
     uint32_t Word = (0x0Cu << 27) | (A << 21) | (62u << 15) | (62u << 9);
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     emitLimm(MI.getOperand(1), /*FixupOff=*/4, Fixups, CB);
     return;
   }
-
-  // Handle codegen-only load/store (may have different operand order than MC forms)
+  // Load shimm: dst, base, offset → I=0x01, A=dst, B=base, D=offset
   if (Opc == ARC4::CG_LDri) {
-    // CG_LDri: dst(reg), base(reg), offset(imm) → LD shimm: A=dst, B=base, D=offset
     uint32_t A = regEnc(MI.getOperand(0));
     uint32_t B = regEnc(MI.getOperand(1));
     uint32_t D = (uint32_t)MI.getOperand(2).getImm() & 0x1FF;
@@ -136,8 +138,17 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     return;
   }
+  // Load reg+reg: dst, base, off → I=0x00, A=dst, B=base, C=off
+  if (Opc == ARC4::CG_LDrr) {
+    uint32_t A = regEnc(MI.getOperand(0));
+    uint32_t B = regEnc(MI.getOperand(1));
+    uint32_t C = regEnc(MI.getOperand(2));
+    uint32_t Word = (0x00u << 27) | (A << 21) | (B << 15) | (C << 9);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  // Store shimm: src, base, offset → I=0x02, A=flags(0), B=base, C=src, D=offset
   if (Opc == ARC4::CG_STri) {
-    // CG_STri: src(reg), base(reg), offset(imm) → ST shimm: A=0(flags), B=base, C=src, D=offset
     uint32_t C = regEnc(MI.getOperand(0));
     uint32_t B = regEnc(MI.getOperand(1));
     uint32_t D = (uint32_t)MI.getOperand(2).getImm() & 0x1FF;
@@ -145,68 +156,44 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     return;
   }
-  if (Opc == ARC4::CG_LDrr) {
-    // CG_LDrr: dst(reg), base(reg), off(reg)
-    uint32_t A = regEnc(MI.getOperand(0));
-    uint32_t B = regEnc(MI.getOperand(1));
-    uint32_t Cv = regEnc(MI.getOperand(2));
-    uint32_t Word = (0x00u << 27) | (A << 21) | (B << 15) | (Cv << 9);
-    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
-    return;
-  }
-
-  // Handle codegen-only call/compare/branch/return instructions.
-  if (Opc == ARC4::CG_CALLi) {
-    // JL [limm]: I=7, A=31(blink), B=62(limm), C=0
-    uint32_t Word = (0x07u << 27) | (31u << 21) | (62u << 15);
-    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
-    emitLimm(MI.getOperand(0), /*FixupOff=*/4, Fixups, CB);
-    return;
-  }
-  if (Opc == ARC4::CG_CALLr) {
-    // JL [reg]: I=7, A=31(blink), B=reg, C=0
-    uint32_t B = regEnc(MI.getOperand(0));
-    uint32_t Word = (0x07u << 27) | (31u << 21) | (B << 15);
-    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
-    return;
-  }
-  // Shift-by-1: ASR/LSR (single operand, opcode 0x03)
-  if (Opc == ARC4::CG_ASR) {
-    uint32_t A = regEnc(MI.getOperand(0)); // dst
-    uint32_t B = regEnc(MI.getOperand(1)); // src
-    // I=0x03, C=1(ASR sub-opcode)
-    uint32_t Word = (0x03u << 27) | (A << 21) | (B << 15) | (1u << 9);
-    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
-    return;
-  }
-  if (Opc == ARC4::CG_LSR) {
-    uint32_t A = regEnc(MI.getOperand(0));
-    uint32_t B = regEnc(MI.getOperand(1));
-    // I=0x03, C=2(LSR sub-opcode)
-    uint32_t Word = (0x03u << 27) | (A << 21) | (B << 15) | (2u << 9);
-    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
-    return;
-  }
+  // Compare reg-reg: SUB.F discard, src1, src2
   if (Opc == ARC4::CG_CMPrr) {
-    // SUB.F 0, src1, src2: I=0xA, A=63(discard), F=1
     uint32_t B = regEnc(MI.getOperand(0));
     uint32_t C = regEnc(MI.getOperand(1));
     uint32_t Word = (0x0Au << 27) | (63u << 21) | (B << 15) | (C << 9) | (1u << 8);
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     return;
   }
+  // Compare reg-shimm: SUB.F discard, src, shimm
   if (Opc == ARC4::CG_CMPri) {
-    // SUB.F 0, src, shimm: I=0xA, A=63, C=61(shimm+flags), D=value
     uint32_t B = regEnc(MI.getOperand(0));
     uint32_t D = (uint32_t)MI.getOperand(1).getImm() & 0x1FF;
     uint32_t Word = (0x0Au << 27) | (63u << 21) | (B << 15) | (61u << 9) | D;
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     return;
   }
-  if (Opc == ARC4::CG_RET) {
-    // J [blink]: I=7, A=0, B=31, C=0
-    uint32_t Word = (0x07u << 27) | (31u << 15);
+  // Shift-by-1: ASR (I=0x03, C=1)
+  if (Opc == ARC4::CG_ASR) {
+    uint32_t A = regEnc(MI.getOperand(0));
+    uint32_t B = regEnc(MI.getOperand(1));
+    uint32_t Word = (0x03u << 27) | (A << 21) | (B << 15) | (1u << 9);
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  // Shift-by-1: LSR (I=0x03, C=2)
+  if (Opc == ARC4::CG_LSR) {
+    uint32_t A = regEnc(MI.getOperand(0));
+    uint32_t B = regEnc(MI.getOperand(1));
+    uint32_t Word = (0x03u << 27) | (A << 21) | (B << 15) | (2u << 9);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    return;
+  }
+  // Call with limm target: JL [limm] (I=7, A=0, B=62, bit9=1)
+  // Per spec p98: JL is encoded as J except bit 9 is set to 1
+  if (Opc == ARC4::CG_CALLi) {
+    uint32_t Word = (0x07u << 27) | (62u << 15) | (1u << 9);
+    support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
+    emitLimm(MI.getOperand(0), /*FixupOff=*/4, Fixups, CB);
     return;
   }
 
@@ -295,7 +282,8 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
       F  = (uint32_t)MI.getOperand(1).getImm() & 0x1;
       NN = (uint32_t)MI.getOperand(2).getImm() & 0x3;
       Q  = (uint32_t)MI.getOperand(3).getImm() & 0x1F;
-      if (isJL) A = 31; // blink
+      // Per spec p98: JL = J with bit 9 set to 1
+      if (isJL) Word |= (1u << 9);
     } else if (isSO) {
       // SO_l: A(0), LImm(1), F(2), Q(3)
       // Per spec: B=62 (limm source), C=sub-opcode
@@ -565,13 +553,14 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
   }
 
   // Jump register: B(0), F(1), NN(2), Q(3)
+  // Per spec p96/p98: J has A=0,C=0. JL is same but bit 9 = 1.
   if (isJump) {
-    uint32_t A  = isJL ? 31u : 0u;
     uint32_t B  = regEnc(MI.getOperand(0));
     uint32_t F  = (uint32_t)MI.getOperand(1).getImm() & 0x1;
     uint32_t NN = (uint32_t)MI.getOperand(2).getImm() & 0x3;
     uint32_t Q  = (uint32_t)MI.getOperand(3).getImm() & 0x1F;
-    Word |= (A << 21) | (B << 15) | (0u << 9) | (F << 8) | (NN << 5) | Q;
+    uint32_t LinkBit = isJL ? (1u << 9) : 0u;
+    Word |= (B << 15) | LinkBit | (F << 8) | (NN << 5) | Q;
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     return;
   }

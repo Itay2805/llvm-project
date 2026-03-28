@@ -333,17 +333,17 @@ def J_r  : ARC4RegFmt<0x07,
     "j\t[$B]">;
 def J_l  : ARC4LimmFmt<0x07,
     (outs), (ins imm32:$LImm, imm1:$F, nn_imm:$NN, cc_imm:$Q),
-    "j\t[$LImm]">;
+    "j\t$LImm">;
 
 // Jump-and-link (0x07, A=r31=blink)
 def JL_r : ARC4RegFmt<0x07,
     (outs), (ins GR:$B, imm1:$F, nn_imm:$NN, cc_imm:$Q),
     "jl\t[$B]"> {
-  let TSFlags{12} = 1; // isJL flag: emitter sets A=31
+  let TSFlags{12} = 1; // isJL flag: emitter sets bit 9 per spec p98
 }
 def JL_l : ARC4LimmFmt<0x07,
     (outs), (ins imm32:$LImm, imm1:$F, nn_imm:$NN, cc_imm:$Q),
-    "jl\t[$LImm]"> {
+    "jl\t$LImm"> {
   let TSFlags{12} = 1;
 }
 
@@ -370,6 +370,7 @@ def SDT_ARC4Call : SDTypeProfile<0, -1, [SDTCisVT<0, iPTR>]>;
 def SDT_ARC4Ret  : SDTypeProfile<0, -1, []>;
 def SDT_ARC4Cmp  : SDTypeProfile<0, 2, [SDTCisSameAs<0, 1>]>;
 def SDT_ARC4BrCC : SDTypeProfile<0, -1, []>;
+def SDT_ARC4Shift1 : SDTypeProfile<1, 1, [SDTCisSameAs<0, 1>]>;
 def SDT_ARC4SelectCC : SDTypeProfile<1, 3, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>]>;
 
 def ARC4call    : SDNode<"ARC4ISD::CALL", SDT_ARC4Call,
@@ -381,6 +382,8 @@ def ARC4brcc    : SDNode<"ARC4ISD::BR_CC", SDT_ARC4BrCC,
                          [SDNPHasChain, SDNPInGlue]>;
 def ARC4selectcc : SDNode<"ARC4ISD::SELECT_CC", SDT_ARC4SelectCC,
                           [SDNPInGlue]>;
+def ARC4asr1 : SDNode<"ARC4ISD::ASR1", SDT_ARC4Shift1>;
+def ARC4lsr1 : SDNode<"ARC4ISD::LSR1", SDT_ARC4Shift1>;
 
 //===----------------------------------------------------------------------===//
 // Codegen-only instructions
@@ -495,7 +498,7 @@ def CG_CALLr : ARC4RegFmt<0x07, (outs), (ins GR:$target),
 
 // --- Call immediate (limm) ---
 def CG_CALLi : ARC4LimmFmt<0x07, (outs), (ins imm32:$target),
-    "jl\t[$target]", []> {
+    "jl\t$target", []> {
   let isCall = 1;
   let TSFlags{12} = 1;
   let Defs = [R0, R1, R2, R3, R4, R5, R6, R7, R31];
@@ -522,14 +525,13 @@ def CG_SELECT_CC : Pseudo<(outs GR:$dst),
 }
 
 // --- Shift-by-1 codegen instructions ---
-// ASR_cg: arithmetic shift right by 1
+// These match the ARC4ISD::ASR1/LSR1 target nodes emitted by LowerShift.
 def CG_ASR : ARC4RegFmt<0x03, (outs GR:$dst), (ins GR:$src),
-    "asr\t$dst, $src", []> {
+    "asr\t$dst, $src", [(set GR:$dst, (ARC4asr1 GR:$src))]> {
   let TSFlags{11-7} = 1; // ASR sub-opcode
 }
-// LSR_cg: logical shift right by 1
 def CG_LSR : ARC4RegFmt<0x03, (outs GR:$dst), (ins GR:$src),
-    "lsr\t$dst, $src", []> {
+    "lsr\t$dst, $src", [(set GR:$dst, (ARC4lsr1 GR:$src))]> {
   let TSFlags{11-7} = 2; // LSR sub-opcode
 }
 

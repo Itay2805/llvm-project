@@ -37,7 +37,7 @@ declare i32 @external(i32, i32)
 
 define i32 @call_extern(i32 %a, i32 %b) {
 ; CHECK-LABEL: call_extern:
-; CHECK: jl [external]
+; CHECK: jl external
 ; CHECK: j [r31]
   %r = call i32 @external(i32 %a, i32 %b)
   ret i32 %r

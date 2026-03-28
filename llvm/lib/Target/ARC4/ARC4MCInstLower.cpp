@@ -6,9 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Converts codegen-only MachineInstrs to MC-layer MCInsts. The codegen
-// instructions have simplified operand lists; we map them to the MC
-// instructions and append default F=0, NN=0, Q=0 operands as needed.
+// Converts codegen MachineInstrs to MC-layer MCInsts. Every codegen-only
+// instruction (CG_*) is translated to its MC equivalent (ADD_rrr, etc.)
+// with the proper trailing operands (F, NN, Q, SetFlags) appended.
+//
+// After this pass, the MC code emitter should NEVER see a CG_ opcode.
 //
 //===----------------------------------------------------------------------===//
 
@@ -62,103 +64,166 @@ MCOperand ARC4MCInstLower::LowerOperand(const MachineOperand &MO) const {
   case MachineOperand::MO_BlockAddress:
     return LowerSymbolOperand(MO);
   case MachineOperand::MO_RegisterMask:
-    return MCOperand(); // skip
+    return MCOperand();
   default:
     llvm_unreachable("Unknown operand type");
   }
 }
 
-// Map codegen-only opcodes to MC-layer opcodes.
-// Returns 0 if no mapping needed (opcode passes through).
-static unsigned mapCGtoMC(unsigned Opc, bool &NeedsRegFmtTrail,
-                          bool &NeedsShimmTrail, bool &NeedsLimmTrail,
-                          bool &IsMOVrr, bool &IsMOVri, bool &IsMOVli) {
-  NeedsRegFmtTrail = NeedsShimmTrail = NeedsLimmTrail = false;
-  IsMOVrr = IsMOVri = IsMOVli = false;
+// Helper: append F=0, NN=0, Q=0 (register format trailing operands)
+static void addRegFmtTrail(MCInst &MI) {
+  MI.addOperand(MCOperand::createImm(0)); // F
+  MI.addOperand(MCOperand::createImm(0)); // NN
+  MI.addOperand(MCOperand::createImm(0)); // Q
+}
 
-  switch (Opc) {
-  // ALU reg-reg: append F=0, NN=0, Q=0
-  case ARC4::CG_ADDrr: NeedsRegFmtTrail = true; return ARC4::ADD_rrr;
-  case ARC4::CG_SUBrr: NeedsRegFmtTrail = true; return ARC4::SUB_rrr;
-  case ARC4::CG_ANDrr: NeedsRegFmtTrail = true; return ARC4::AND_rrr;
-  case ARC4::CG_ORrr:  NeedsRegFmtTrail = true; return ARC4::OR_rrr;
-  case ARC4::CG_XORrr: NeedsRegFmtTrail = true; return ARC4::XOR_rrr;
-
-  // ALU reg-imm: append SetFlags=0, NN=0
-  case ARC4::CG_ADDri: NeedsShimmTrail = true; return ARC4::ADD_rrs;
-  case ARC4::CG_SUBri: NeedsShimmTrail = true; return ARC4::SUB_rrs;
-  case ARC4::CG_ANDri: NeedsShimmTrail = true; return ARC4::AND_rrs;
-  case ARC4::CG_ORri:  NeedsShimmTrail = true; return ARC4::OR_rrs;
-
-  // MOV register: AND dst, src, src → need special handling
-  case ARC4::CG_MOVrr: IsMOVrr = true; return ARC4::AND_rrr;
-
-  // MOV shimm: AND dst, shimm, shimm → special: B=C=sentinel, D=value
-  case ARC4::CG_MOVri: IsMOVri = true; return ARC4::AND_rrs;
-
-  // MOV limm: AND dst, limm → AND_rrl with B position unused
-  case ARC4::CG_MOVli: IsMOVli = true; return ARC4::AND_rrl;
-
-  // Load/Store: append trailing imms
-  case ARC4::CG_LDri: NeedsShimmTrail = true; return ARC4::LD_rrs;
-  case ARC4::CG_LDrr: NeedsRegFmtTrail = true; return ARC4::LD_rrr;
-  case ARC4::CG_STri: return ARC4::ST_rrs; // store has no trailing imms
-
-  // Compare: discard dest SUB with F=1
-  case ARC4::CG_CMPrr: return 0; // handled specially
-  case ARC4::CG_CMPri: return 0;
-
-  // Shift-by-1: handled in code emitter
-  case ARC4::CG_ASR: return 0;
-  case ARC4::CG_LSR: return 0;
-
-  // Calls handled specially below (not through trail mechanism)
-  case ARC4::CG_CALLi: return 0;
-  case ARC4::CG_CALLr: return 0;
-
-  // Branches need NN=0, Q=0 trailing operands
-  case ARC4::CG_BR:    return 0; // handled specially below
-  case ARC4::CG_BRcc:  return 0; // handled specially below
-
-  // Return handled specially below
-  case ARC4::CG_RET:   return 0;
-
-  default: return 0; // pass through as-is
-  }
+// Helper: append SetFlags=0, NN=0 (shimm format trailing operands)
+static void addShimmTrail(MCInst &MI) {
+  MI.addOperand(MCOperand::createImm(0)); // SetFlags
+  MI.addOperand(MCOperand::createImm(0)); // NN
 }
 
 void ARC4MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
-  bool NeedsRegFmtTrail, NeedsShimmTrail, NeedsLimmTrail;
-  bool IsMOVrr, IsMOVri, IsMOVli;
-  unsigned MCOpc = mapCGtoMC(MI->getOpcode(), NeedsRegFmtTrail,
-                             NeedsShimmTrail, NeedsLimmTrail,
-                             IsMOVrr, IsMOVri, IsMOVli);
+  unsigned Opc = MI->getOpcode();
 
-  if (MCOpc)
+  // ---------------------------------------------------------------
+  // ALU register-register: CG_ADDrr etc. → ADD_rrr + F=0, NN=0, Q=0
+  // ---------------------------------------------------------------
+  auto lowerALUrr = [&](unsigned MCOpc) {
     OutMI.setOpcode(MCOpc);
-  else
-    OutMI.setOpcode(MI->getOpcode());
+    OutMI.addOperand(LowerOperand(MI->getOperand(0))); // dst
+    OutMI.addOperand(LowerOperand(MI->getOperand(1))); // src1
+    OutMI.addOperand(LowerOperand(MI->getOperand(2))); // src2
+    addRegFmtTrail(OutMI);
+  };
 
-  // === Handle all special cases FIRST (before generic operand loop) ===
+  // ALU register-immediate: CG_ADDri etc. → ADD_rrs + SetFlags=0, NN=0
+  auto lowerALUri = [&](unsigned MCOpc) {
+    OutMI.setOpcode(MCOpc);
+    OutMI.addOperand(LowerOperand(MI->getOperand(0))); // dst
+    OutMI.addOperand(LowerOperand(MI->getOperand(1))); // src
+    OutMI.addOperand(LowerOperand(MI->getOperand(2))); // imm
+    addShimmTrail(OutMI);
+  };
 
-  // CG_CALLi / CG_CALLr → detect symbol vs register from the first operand
-  if (MI->getOpcode() == ARC4::CG_CALLi ||
-      MI->getOpcode() == ARC4::CG_CALLr) {
-    const MachineOperand &TargetMO = MI->getOperand(0);
-    MCOperand Target = LowerOperand(TargetMO);
-    if (TargetMO.isReg()) {
-      // Register call: JL [reg]
-      OutMI.setOpcode(ARC4::CG_CALLr);
-    } else {
-      // Symbol/address call: JL [symbol] (limm)
-      OutMI.setOpcode(ARC4::CG_CALLi);
-    }
-    if (Target.isValid())
-      OutMI.addOperand(Target);
+  switch (Opc) {
+  // --- ALU register-register ---
+  case ARC4::CG_ADDrr: lowerALUrr(ARC4::ADD_rrr); return;
+  case ARC4::CG_SUBrr: lowerALUrr(ARC4::SUB_rrr); return;
+  case ARC4::CG_ANDrr: lowerALUrr(ARC4::AND_rrr); return;
+  case ARC4::CG_ORrr:  lowerALUrr(ARC4::OR_rrr);  return;
+  case ARC4::CG_XORrr: lowerALUrr(ARC4::XOR_rrr); return;
+
+  // --- ALU register-immediate ---
+  case ARC4::CG_ADDri: lowerALUri(ARC4::ADD_rrs); return;
+  case ARC4::CG_SUBri: lowerALUri(ARC4::SUB_rrs); return;
+  case ARC4::CG_ANDri: lowerALUri(ARC4::AND_rrs); return;
+  case ARC4::CG_ORri:  lowerALUri(ARC4::OR_rrs);  return;
+
+  // --- MOV register: AND dst, src, src ---
+  case ARC4::CG_MOVrr: {
+    OutMI.setOpcode(ARC4::AND_rrr);
+    MCOperand Dst = LowerOperand(MI->getOperand(0));
+    MCOperand Src = LowerOperand(MI->getOperand(1));
+    OutMI.addOperand(Dst);
+    OutMI.addOperand(Src);
+    OutMI.addOperand(Src); // C = B (AND b,b = MOV)
+    addRegFmtTrail(OutMI);
     return;
   }
-  // CG_BR → B with target, NN=0, Q=0
-  if (MI->getOpcode() == ARC4::CG_BR) {
+
+  // --- MOV shimm: AND dst, shimm, shimm (B=R63, C=R63 sentinel) ---
+  // Handled directly by code emitter (CG_MOVri) since the MC shimm format
+  // doesn't support both B and C as shimm sentinels through normal operands.
+  case ARC4::CG_MOVri:
+  case ARC4::CG_MOVli:
+    // Pass through to code emitter which handles these specially
+    OutMI.setOpcode(Opc);
+    for (const MachineOperand &MO : MI->operands()) {
+      MCOperand MCOp = LowerOperand(MO);
+      if (MCOp.isValid())
+        OutMI.addOperand(MCOp);
+    }
+    return;
+
+  // --- Load register+offset: CG_LDri → LD_rrs + SetFlags=0, NN=0 ---
+  case ARC4::CG_LDri:
+    // Pass through to code emitter (operand order matches, needs special
+    // handling for LD shimm C-field encoding)
+    OutMI.setOpcode(Opc);
+    for (const MachineOperand &MO : MI->operands()) {
+      MCOperand MCOp = LowerOperand(MO);
+      if (MCOp.isValid())
+        OutMI.addOperand(MCOp);
+    }
+    return;
+
+  // --- Load register+register: CG_LDrr ---
+  case ARC4::CG_LDrr:
+    OutMI.setOpcode(Opc);
+    for (const MachineOperand &MO : MI->operands()) {
+      MCOperand MCOp = LowerOperand(MO);
+      if (MCOp.isValid())
+        OutMI.addOperand(MCOp);
+    }
+    return;
+
+  // --- Store register+offset: CG_STri → ST_rrs (no trailing operands) ---
+  case ARC4::CG_STri:
+    OutMI.setOpcode(Opc);
+    for (const MachineOperand &MO : MI->operands()) {
+      MCOperand MCOp = LowerOperand(MO);
+      if (MCOp.isValid())
+        OutMI.addOperand(MCOp);
+    }
+    return;
+
+  // --- Compare reg-reg: SUB_0rr with F=1 (discard result, set flags) ---
+  case ARC4::CG_CMPrr:
+    OutMI.setOpcode(Opc);
+    OutMI.addOperand(LowerOperand(MI->getOperand(0))); // src1
+    OutMI.addOperand(LowerOperand(MI->getOperand(1))); // src2
+    return;
+
+  // --- Compare reg-imm: SUB_0rs with SetFlags=1 ---
+  case ARC4::CG_CMPri:
+    OutMI.setOpcode(Opc);
+    OutMI.addOperand(LowerOperand(MI->getOperand(0))); // src
+    OutMI.addOperand(LowerOperand(MI->getOperand(1))); // imm
+    return;
+
+  // --- Shift-by-1: ASR/LSR ---
+  case ARC4::CG_ASR:
+  case ARC4::CG_LSR:
+    OutMI.setOpcode(Opc);
+    for (const MachineOperand &MO : MI->operands()) {
+      MCOperand MCOp = LowerOperand(MO);
+      if (MCOp.isValid())
+        OutMI.addOperand(MCOp);
+    }
+    return;
+
+  // --- Call with symbol target ---
+  case ARC4::CG_CALLi:
+  case ARC4::CG_CALLr: {
+    const MachineOperand &TargetMO = MI->getOperand(0);
+    if (TargetMO.isReg()) {
+      // Register call: JL_r with B=target, F=0, NN=0, Q=0
+      OutMI.setOpcode(ARC4::JL_r);
+      OutMI.addOperand(LowerOperand(TargetMO));
+      addRegFmtTrail(OutMI);
+    } else {
+      // Symbol call: pass through to code emitter (needs limm fixup)
+      OutMI.setOpcode(ARC4::CG_CALLi);
+      MCOperand Target = LowerOperand(TargetMO);
+      if (Target.isValid())
+        OutMI.addOperand(Target);
+    }
+    return;
+  }
+
+  // --- Unconditional branch ---
+  case ARC4::CG_BR: {
     OutMI.setOpcode(ARC4::B);
     for (const MachineOperand &MO : MI->operands()) {
       MCOperand MCOp = LowerOperand(MO);
@@ -166,14 +231,14 @@ void ARC4MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
         OutMI.addOperand(MCOp);
     }
     OutMI.addOperand(MCOperand::createImm(0)); // NN
-    OutMI.addOperand(MCOperand::createImm(0)); // Q
+    OutMI.addOperand(MCOperand::createImm(0)); // Q=0 (unconditional)
     return;
   }
-  // CG_BRcc → B with target, NN=0, Q=cc
-  if (MI->getOpcode() == ARC4::CG_BRcc) {
+
+  // --- Conditional branch ---
+  case ARC4::CG_BRcc: {
     OutMI.setOpcode(ARC4::B);
-    // Find MBB target and CC immediate from operands
-    // (operand positions may shift due to implicit operands)
+    // Find MBB target and CC immediate
     unsigned CC = 0;
     for (const MachineOperand &MO : MI->operands()) {
       if (MO.isMBB()) {
@@ -184,123 +249,27 @@ void ARC4MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
         CC = MO.getImm();
       }
     }
-    OutMI.addOperand(MCOperand::createImm(0)); // NN
-    OutMI.addOperand(MCOperand::createImm(CC)); // Q
+    OutMI.addOperand(MCOperand::createImm(0));  // NN
+    OutMI.addOperand(MCOperand::createImm(CC)); // Q = condition code
     return;
   }
-  // CG_RET → J_r with B=r31(blink), F=0, NN=0, Q=0
-  if (MI->getOpcode() == ARC4::CG_RET) {
+
+  // --- Return: J_r with B=r31(blink) ---
+  case ARC4::CG_RET:
     OutMI.setOpcode(ARC4::J_r);
     OutMI.addOperand(MCOperand::createReg(ARC4::R31));
-    OutMI.addOperand(MCOperand::createImm(0)); // F
-    OutMI.addOperand(MCOperand::createImm(0)); // NN
-    OutMI.addOperand(MCOperand::createImm(0)); // Q
+    addRegFmtTrail(OutMI);
     return;
+
+  default:
+    break;
   }
 
-  // === MOV special cases ===
-
-  // Special: MOV rr → AND dst, src, src (duplicate the source reg)
-  if (IsMOVrr) {
-    for (const MachineOperand &MO : MI->operands()) {
-      MCOperand MCOp = LowerOperand(MO);
-      if (MCOp.isValid()) {
-        OutMI.addOperand(MCOp);
-        if (MO.isReg() && !MO.isDef())
-          OutMI.addOperand(MCOp); // duplicate src as both B and C
-      }
-    }
-    // Append F=0, NN=0, Q=0
-    OutMI.addOperand(MCOperand::createImm(0));
-    OutMI.addOperand(MCOperand::createImm(0));
-    OutMI.addOperand(MCOperand::createImm(0));
-    return;
-  }
-
-  // Special: MOV ri → AND_rrs with shimm,shimm encoding
-  // MCInst layout for AND_rrs: A(reg), B(reg), D(shimm), SetFlags, NN
-  // But for MOV shimm, B should be shimm sentinel too.
-  // The shimm-in-B form (AND_rsr) handles this: A(reg), D(shimm), C(reg), ...
-  // Actually, for MOV a,shimm: use the _rrs form where the emitter sees
-  // A=dest, B=shimm_sentinel(63), C=shimm_sentinel(63), D=value
-  // But _rrs format expects A(reg), B(reg), D(simm9), SetFlags, NN
-  // We need to emit: A=dst, B=<unused>, D=shimm, SetFlags=0, NN=0
-  // The code emitter for shimm puts C=63(no-flag) when SetFlags=0.
-  // For the B operand, we need it to also be shimm. Hmm.
-  //
-  // Simpler approach: just use the shimm-in-B form (_rsr) which has
-  // A(reg), D(shimm), C(reg), SetFlags, NN. But we don't have a C register...
-  //
-  // Actually the cleanest: emit the AND_rrs as A=dst, B=dst, D=imm, SF=0, NN=0
-  // This computes dst = dst AND imm which is WRONG for MOV.
-  //
-  // The REAL correct approach per spec: use AND_rrs but set B to also be a
-  // shimm sentinel. Let's just output a text "mov" instruction and let the
-  // assembler handle it... but we don't have a MOV in the assembler.
-  //
-  // Best approach: emit as literal text via the InstPrinter path and
-  // handle it specially in the code emitter for the shimm format.
-  // For now: emit AND_rrs with correct operand order and have the
-  // code emitter detect the MOV pattern (B=63 sentinel).
-  if (IsMOVri) {
-    // Emit: AND_rrs dst, shimm, SetFlags=0, NN=0
-    // The code emitter will see: A=dst_reg, B=... but we only have 2 operands
-    // (dst, imm). We need to synthesize B.
-    // Just pass through CG_MOVri and handle in code emitter.
-    OutMI.setOpcode(MI->getOpcode());
-    for (const MachineOperand &MO : MI->operands()) {
-      MCOperand MCOp = LowerOperand(MO);
-      if (MCOp.isValid())
-        OutMI.addOperand(MCOp);
-    }
-    return;
-  }
-
-  // Special: MOV limm → pass through
-  if (IsMOVli) {
-    OutMI.setOpcode(MI->getOpcode());
-    for (const MachineOperand &MO : MI->operands()) {
-      MCOperand MCOp = LowerOperand(MO);
-      if (MCOp.isValid())
-        OutMI.addOperand(MCOp);
-    }
-    return;
-  }
-
-  // Special: CG_BR → B with target, NN=0, Q=0
-  if (MI->getOpcode() == ARC4::CG_BR) {
-    OutMI.setOpcode(ARC4::B);
-    for (const MachineOperand &MO : MI->operands()) {
-      MCOperand MCOp = LowerOperand(MO);
-      if (MCOp.isValid())
-        OutMI.addOperand(MCOp);
-    }
-    OutMI.addOperand(MCOperand::createImm(0)); // NN
-    OutMI.addOperand(MCOperand::createImm(0)); // Q
-    return;
-  }
-
-  // General case: lower operands
+  // --- Default: pass through (for non-CG instructions from the assembler) ---
+  OutMI.setOpcode(Opc);
   for (const MachineOperand &MO : MI->operands()) {
     MCOperand MCOp = LowerOperand(MO);
     if (MCOp.isValid())
       OutMI.addOperand(MCOp);
-  }
-
-  // Append trailing default operands for MC-layer instructions
-  if (NeedsRegFmtTrail) {
-    // F=0, NN=0, Q=0
-    OutMI.addOperand(MCOperand::createImm(0));
-    OutMI.addOperand(MCOperand::createImm(0));
-    OutMI.addOperand(MCOperand::createImm(0));
-  } else if (NeedsShimmTrail) {
-    // SetFlags=0, NN=0
-    OutMI.addOperand(MCOperand::createImm(0));
-    OutMI.addOperand(MCOperand::createImm(0));
-  } else if (NeedsLimmTrail) {
-    // F=0, NN=0, Q=0
-    OutMI.addOperand(MCOperand::createImm(0));
-    OutMI.addOperand(MCOperand::createImm(0));
-    OutMI.addOperand(MCOperand::createImm(0));
   }
 }
