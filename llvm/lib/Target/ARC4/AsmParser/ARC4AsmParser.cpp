@@ -611,7 +611,7 @@ static bool isShimmForm(unsigned Opc) {
 ///   Operands: [mnem, imm_val, [, imm_addr, ]]  (5 operands)
 ///   The limm is adjusted: limm_encoded = addr - shimm.
 static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
-                             MCInst &Inst) {
+                             MCInst &Inst, MCContext &Ctx) {
   // Map mnemonic to srs/sss/sls opcode triples.
   unsigned SRSOpc = 0, SSSOpc = 0, SLSOpc = 0;
   if (Mnemonic == "st") {
@@ -660,25 +660,36 @@ static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
         O3->isImm() && O4->isToken() && O4->getToken() == "]") {
       const auto *CEVal = dyn_cast<MCConstantExpr>(O1->Expr);
       const auto *CEAddr = dyn_cast<MCConstantExpr>(O3->Expr);
-      if (CEVal && CEAddr) {
+      if (CEVal) {
         int64_t Val = CEVal->getValue();
-        int64_t Addr = CEAddr->getValue();
         if (Val >= -256 && Val <= 255) {
-          if (Val == Addr) {
-            // Pattern sss: val == addr, both shimm.
-            // Build ST_sss: (ins st_offset9:$offset)
+          if (CEAddr) {
+            int64_t Addr = CEAddr->getValue();
+            if (Val == Addr) {
+              // Pattern sss: val == addr, both shimm.
+              Inst.clear();
+              Inst.setOpcode(SSSOpc);
+              Inst.addOperand(MCOperand::createImm(Val));
+              return true;
+            }
+            // Pattern sls (constant addr): shimm value, limm address.
+            // limm_encoded = addr - shimm.
             Inst.clear();
-            Inst.setOpcode(SSSOpc);
-            Inst.addOperand(MCOperand::createImm(Val));  // offset (= val = base)
+            Inst.setOpcode(SLSOpc);
+            Inst.addOperand(MCOperand::createImm(Addr - Val));
+            Inst.addOperand(MCOperand::createImm(Val));
             return true;
           }
-          // Pattern sls: shimm value, limm address.
-          // Build ST_sls: (ins limm32:$limm, st_offset9:$offset)
-          // The limm is adjusted: limm_encoded = addr - shimm.
+          // Pattern sls (symbol addr): st shimm, [label]
+          // Encode as st shimm, [label - shimm, shimm].
+          // Create MCExpr: label - Val, so the linker resolves
+          // limm = label - Val, and effective address = limm + Val = label.
+          const MCExpr *AdjAddr = MCBinaryExpr::createSub(
+              O3->Expr, MCConstantExpr::create(Val, Ctx), Ctx);
           Inst.clear();
           Inst.setOpcode(SLSOpc);
-          Inst.addOperand(MCOperand::createImm(Addr - Val)); // adjusted limm
-          Inst.addOperand(MCOperand::createImm(Val));        // offset (= val)
+          Inst.addOperand(MCOperand::createExpr(AdjAddr));
+          Inst.addOperand(MCOperand::createImm(Val));
           return true;
         }
       }
@@ -795,7 +806,8 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   // cannot handle, so we detect and build them manually.
   StringRef Mnemonic =
       static_cast<ARC4Operand *>(Operands[0].get())->getToken();
-  bool StoreShimmMatched = tryMatchStoreSRS(Mnemonic, Operands, Inst);
+  bool StoreShimmMatched = tryMatchStoreSRS(Mnemonic, Operands, Inst,
+                                             getContext());
 
   if (StoreShimmMatched) {
     // Store shimm forms have no suffix operands (no f/q/n fields).
@@ -824,18 +836,26 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     else if (MatchedOpc == ARC4::LDW_ss) LimmOpc = ARC4::LDW_l;
 
     if (LimmOpc != 0) {
-      // Check if the assembly had a single [imm] (no comma between brackets).
-      // If so, the user intended an absolute address, not shimm+shimm.
-      // We detect this by checking if there were exactly 4 tokens:
-      // [mnemonic, reg, "[", imm, "]"] = 5 operands (no second bracket operand).
+      // The matcher selected LD_ss (shimm+shimm) for single-immediate [addr].
+      // LD_ss doubles the address (base + offset = shimm + shimm = 2*shimm).
+      // Check if the assembly had a single [imm] (no comma):
       bool SingleBracketImm = (Operands.size() == 5);
       if (SingleBracketImm) {
-        // Redirect to LD_l: takes (GPR32 dest, limm32 addr)
-        MCInst NewInst;
-        NewInst.setOpcode(LimmOpc);
-        NewInst.addOperand(Inst.getOperand(0)); // dest register
-        NewInst.addOperand(Inst.getOperand(1)); // address (was shimm, now limm)
-        Inst = NewInst;
+        int64_t Addr = Inst.getOperand(1).getImm();
+        // Optimization: if addr is even and addr/2 fits in shimm (-256..255),
+        // keep the LD_ss form with shimm = addr/2 (saves 4 bytes vs limm).
+        int64_t Half = Addr / 2;
+        if ((Addr & 1) == 0 && Half >= -256 && Half <= 255) {
+          // Rewrite the shimm operand to addr/2.
+          Inst.getOperand(1).setImm(Half);
+        } else {
+          // Redirect to LD_l (limm form) for odd or large addresses.
+          MCInst NewInst;
+          NewInst.setOpcode(LimmOpc);
+          NewInst.addOperand(Inst.getOperand(0)); // dest register
+          NewInst.addOperand(Inst.getOperand(1)); // address as limm
+          Inst = NewInst;
+        }
       }
     }
     // Validate suffix compatibility before filling operands.

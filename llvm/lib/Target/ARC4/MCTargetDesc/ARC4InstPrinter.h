@@ -32,6 +32,7 @@ public:
   static const char *getRegisterName(MCRegister Reg);
 
   void printOperand(const MCInst *MI, unsigned OpNo, raw_ostream &O);
+  void printLdSsAddr(const MCInst *MI, unsigned OpNo, raw_ostream &O);
 };
 
 } // namespace llvm

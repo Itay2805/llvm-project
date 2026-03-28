@@ -78,6 +78,12 @@ def ld_offset9 : Operand<i32> {
   let ParserMatchClass = Simm9AsmOperand;
 }
 
+// Shimm+shimm load address: printed as effective address (2*shimm).
+def ld_ss_addr : Operand<i32> {
+  let PrintMethod = "printLdSsAddr";
+  let ParserMatchClass = Simm9AsmOperand;
+}
+
 //===----------------------------------------------------------------------===//
 // NOP - fixed encoding 0x7fffffff
 //===----------------------------------------------------------------------===//
@@ -325,9 +331,9 @@ multiclass LoadAll<string mnemonic, bits<2> size> {
       let X = 0;
     }
 
-    // --- Opcode 1: ld a, [shimm, shimm] ---
+    // --- Opcode 1: ld a, [shimm, shimm] (effective addr = 2*shimm) ---
     def _ss : ARC4InstLD1_ss<
-      (outs GPR32:$a), (ins ld_offset9:$shimm),
+      (outs GPR32:$a), (ins ld_ss_addr:$shimm),
       mnemonic # "\t$a, [$shimm]", []> {
       let E = 0;
       let Z = size;

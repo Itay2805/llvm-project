@@ -23,8 +23,8 @@ ld r0, [r1, 1000]
 ; CHECK: ld	r0, [1000, r1]          ; encoding: [0x00,0x02,0x1f,0x00,0xe8,0x03,0x00,0x00]
 ld r0, [1000, r1]
 
-; --- Load: absolute address (limm form) ---
-; CHECK: ld	r0, [100]               ; encoding: [0x00,0x00,0x1f,0x08,0x64,0x00,0x00,0x00]
+; --- Load: absolute address 100 (shimm optimization: 100/2=50, 4 bytes) ---
+; CHECK: ld	r0, [100]               ; encoding: [0x32,0x80,0x1f,0x08]
 ld r0, [100]
 
 ; --- Store: reg value, reg base, shimm offset ---
