@@ -873,8 +873,8 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                        ParsedDelaySlot);
 
     // Default delay slot for JL_l: .jd (2) when no explicit suffix was parsed.
+    // The backend's MCInstLowering will need equivalent logic.
     if (Inst.getOpcode() == ARC4::JL_l && !ParsedHasExplicitSuffix) {
-      // The delay slot is the last operand.
       unsigned NIdx = Inst.getNumOperands() - 1;
       Inst.getOperand(NIdx).setImm(2);  // .jd = 2
     }
