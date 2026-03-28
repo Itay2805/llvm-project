@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
 
@@ -28,14 +29,32 @@ void ARC4FrameLowering::emitPrologue(MachineFunction &MF,
   MachineBasicBlock::iterator MBBI = MBB.begin();
   DebugLoc DL;
 
+  bool SaveBlink = MFI.hasCalls();
   uint64_t StackSize = MFI.getStackSize();
+
+  // Reserve an extra slot for blink if needed.
+  if (SaveBlink)
+    StackSize += 4;
+
   if (StackSize == 0)
     return;
 
-  // SUB r28, r28, StackSize (allocate stack)
+  // Align stack size to 4 bytes.
+  StackSize = alignTo(StackSize, 4);
+  MFI.setStackSize(SaveBlink ? StackSize - 4 : StackSize);
+
+  // SUB sp, sp, StackSize (allocate stack)
   BuildMI(MBB, MBBI, DL, TII.get(ARC4::CG_SUBri), ARC4::R28)
       .addReg(ARC4::R28)
       .addImm(StackSize);
+
+  // Save blink at the bottom of the frame.
+  if (SaveBlink) {
+    BuildMI(MBB, MBBI, DL, TII.get(ARC4::CG_STri))
+        .addReg(ARC4::R31)
+        .addReg(ARC4::R28)
+        .addImm(StackSize - 4);
+  }
 }
 
 void ARC4FrameLowering::emitEpilogue(MachineFunction &MF,
@@ -46,11 +65,25 @@ void ARC4FrameLowering::emitEpilogue(MachineFunction &MF,
   MachineBasicBlock::iterator MBBI = MBB.getLastNonDebugInstr();
   DebugLoc DL;
 
+  bool SaveBlink = MFI.hasCalls();
   uint64_t StackSize = MFI.getStackSize();
+
+  if (SaveBlink)
+    StackSize += 4;
+
+  StackSize = alignTo(StackSize, 4);
+
   if (StackSize == 0)
     return;
 
-  // ADD r28, r28, StackSize (deallocate stack)
+  // Restore blink before deallocating.
+  if (SaveBlink) {
+    BuildMI(MBB, MBBI, DL, TII.get(ARC4::CG_LDri), ARC4::R31)
+        .addReg(ARC4::R28)
+        .addImm(StackSize - 4);
+  }
+
+  // ADD sp, sp, StackSize (deallocate stack)
   BuildMI(MBB, MBBI, DL, TII.get(ARC4::CG_ADDri), ARC4::R28)
       .addReg(ARC4::R28)
       .addImm(StackSize);
