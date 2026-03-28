@@ -8,6 +8,7 @@
 
 #include "ARC4FixupKinds.h"
 #include "ARC4MCTargetDesc.h"
+#include "ARC4TSFlags.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/MC/MCCodeEmitter.h"
@@ -100,117 +101,27 @@ static void detectShimmFields(uint32_t Value, bool &AFieldIsShimm,
 /// Find the flag (f) operand value for sentinel flipping.
 /// Returns the f operand value, or 0 if not applicable.
 ///
-/// Sentinel flipping is needed for:
-/// - Shimm forms (rrs/rsr/rss, SOP rs): flip B/C sentinel 63->61
-/// - Discard forms (0rr/0rs/0sr/0ss/0rl/0lr, SOP 0r/0s/0l): flip A sentinel 63->61
+/// Sentinel flipping changes sentinel 63 (SHIMM, no flag update) to 61
+/// (SHIMM_UPDATE) in register fields when the .f suffix is present.  This
+/// covers shimm forms (B/C field) and discard forms (A field = 63).
 ///
-/// For non-shimm non-discard forms, f is wired to bit[8] by TableGen
-/// and no post-hoc flip is needed.
+/// TSFlags encode the suffix layout so we no longer need per-opcode cases:
+///   HasFOnly  — shimm forms:          f is the last operand
+///   HasFQ     — non-shimm ALU/SOP:    f is at ExpOps-2 (before q)
+///   HasFQN    — jump forms:           f is at ExpOps-3 (before q, n)
 static int getSentinelFlagValue(const MCInst &Inst, const MCInstrDesc &Desc) {
-  unsigned NumOps = Inst.getNumOperands();
   unsigned ExpOps = Desc.getNumOperands();
-  if (NumOps < ExpOps || ExpOps == 0)
+  if (Inst.getNumOperands() < ExpOps || ExpOps == 0)
     return 0;
 
-  // Check if any register field has sentinel 63 (SHIMM) that might need
-  // flipping to 61 (SHIMM_UPDATE). This covers both shimm operands in
-  // B/C fields AND discard sentinels in the A field.
-  //
-  // The f operand position varies by form but is always present as an
-  // i32imm. For shimm-only forms it's the last operand; for non-shimm
-  // discard forms it's typically at a known position. We use a simple
-  // heuristic: check the encoded instruction for sentinel 63 in any
-  // field. If found, read the f value from the instruction.
-  //
-  // Rather than enumerate all opcodes, we check the encoded word later.
-  // Here we just need to return the f operand value. The f operand is
-  // always the first i32imm after the visible operands for forms that
-  // need sentinel flipping. Since the caller only uses this when a
-  // sentinel 63 is detected, it's safe to always return the f value.
-
-  // For all instruction forms with suffix operands, the f operand
-  // position depends on the form. Find it by checking which operand
-  // looks like f (value 0 or 1, appears after visible operands).
-  // In our convention: for shimm forms, f is the last operand.
-  // For non-shimm forms, f comes after visible ops but before q.
-  //
-  // Simplest correct approach: the f operand is always an immediate
-  // with value 0 or 1. The last few operands are suffix operands
-  // (f, q, n in some order). Find the f by checking operand values.
-  // Actually, f is always at a specific position per instruction form.
-  // But since we can't easily determine the form here, we check
-  // whether the instruction HAS a sentinel 63 in A/B/C — if so,
-  // the last operand (for shimm) or the f-position operand (for
-  // discard non-shimm) tells us the flag value.
-
-  // The f operand is the last operand for shimm forms (only suffix is f).
-  // For non-shimm forms with f+q, f is at ExpOps-2 position.
-  // For non-shimm forms with f+q+n, f is at ExpOps-3 position.
-  // To simplify: just return the last operand if it's 0 or 1 (shimm forms),
-  // or check the second-to-last / third-to-last for other forms.
-  // Actually, the simplest: return 1 if ANY suffix operand is 1 and
-  // represents f. But that requires knowing which one is f.
-
-  // Pragmatic: enumerate the opcodes that need sentinel flipping.
-  // This includes ALL forms where A, B, or C could be sentinel 63.
-  unsigned Opc = Inst.getOpcode();
-  switch (Opc) {
-  // --- Shimm forms: f is the LAST operand ---
-  // ALU3 shimm variants
-  case ARC4::ADD_rrs: case ARC4::ADD_rsr: case ARC4::ADD_rss:
-  case ARC4::ADD_0rs: case ARC4::ADD_0sr: case ARC4::ADD_0ss:
-  case ARC4::ADC_rrs: case ARC4::ADC_rsr: case ARC4::ADC_rss:
-  case ARC4::ADC_0rs: case ARC4::ADC_0sr: case ARC4::ADC_0ss:
-  case ARC4::SUB_rrs: case ARC4::SUB_rsr: case ARC4::SUB_rss:
-  case ARC4::SUB_0rs: case ARC4::SUB_0sr: case ARC4::SUB_0ss:
-  case ARC4::SBC_rrs: case ARC4::SBC_rsr: case ARC4::SBC_rss:
-  case ARC4::SBC_0rs: case ARC4::SBC_0sr: case ARC4::SBC_0ss:
-  case ARC4::AND_rrs: case ARC4::AND_rsr: case ARC4::AND_rss:
-  case ARC4::AND_0rs: case ARC4::AND_0sr: case ARC4::AND_0ss:
-  case ARC4::OR_rrs:  case ARC4::OR_rsr:  case ARC4::OR_rss:
-  case ARC4::OR_0rs:  case ARC4::OR_0sr:  case ARC4::OR_0ss:
-  case ARC4::BIC_rrs: case ARC4::BIC_rsr: case ARC4::BIC_rss:
-  case ARC4::BIC_0rs: case ARC4::BIC_0sr: case ARC4::BIC_0ss:
-  case ARC4::XOR_rrs: case ARC4::XOR_rsr: case ARC4::XOR_rss:
-  case ARC4::XOR_0rs: case ARC4::XOR_0sr: case ARC4::XOR_0ss:
-  // SOP shimm variants
-  case ARC4::ASR_rs:  case ARC4::ASR_0s:
-  case ARC4::LSR_rs:  case ARC4::LSR_0s:
-  case ARC4::ROR_rs:  case ARC4::ROR_0s:
-  case ARC4::RRC_rs:  case ARC4::RRC_0s:
-  case ARC4::SEXB_rs: case ARC4::SEXB_0s:
-  case ARC4::SEXW_rs: case ARC4::SEXW_0s:
-  case ARC4::EXTB_rs: case ARC4::EXTB_0s:
-  case ARC4::EXTW_rs: case ARC4::EXTW_0s:
+  uint64_t TSF = Desc.TSFlags;
+  if (TSF & ARC4TSF::HasFOnly)
     return Inst.getOperand(ExpOps - 1).getImm();
-
-  // --- Non-shimm discard forms: A field has sentinel 63 ---
-  // For these, f is wired to bit[8] by TableGen, BUT we also need
-  // to flip A from 63->61. The f operand is at position ExpOps-2
-  // (before q) for rrr/rrl/rlr forms.
-  case ARC4::ADD_0rr: case ARC4::ADD_0rl: case ARC4::ADD_0lr:
-  case ARC4::ADC_0rr: case ARC4::ADC_0rl: case ARC4::ADC_0lr:
-  case ARC4::SUB_0rr: case ARC4::SUB_0rl: case ARC4::SUB_0lr:
-  case ARC4::SBC_0rr: case ARC4::SBC_0rl: case ARC4::SBC_0lr:
-  case ARC4::AND_0rr: case ARC4::AND_0rl: case ARC4::AND_0lr:
-  case ARC4::OR_0rr:  case ARC4::OR_0rl:  case ARC4::OR_0lr:
-  case ARC4::BIC_0rr: case ARC4::BIC_0rl: case ARC4::BIC_0lr:
-  case ARC4::XOR_0rr: case ARC4::XOR_0rl: case ARC4::XOR_0lr:
-  // SOP non-shimm discard: f is at ExpOps-2 (before q)
-  case ARC4::ASR_0r:  case ARC4::ASR_0l:
-  case ARC4::LSR_0r:  case ARC4::LSR_0l:
-  case ARC4::ROR_0r:  case ARC4::ROR_0l:
-  case ARC4::RRC_0r:  case ARC4::RRC_0l:
-  case ARC4::SEXB_0r: case ARC4::SEXB_0l:
-  case ARC4::SEXW_0r: case ARC4::SEXW_0l:
-  case ARC4::EXTB_0r: case ARC4::EXTB_0l:
-  case ARC4::EXTW_0r: case ARC4::EXTW_0l:
-    // f is at ExpOps-2 (before q). ins order: ..., f, q
+  if (TSF & ARC4TSF::HasFQ)
     return Inst.getOperand(ExpOps - 2).getImm();
-
-  default:
-    return 0;
-  }
+  if (TSF & ARC4TSF::HasFQN)
+    return Inst.getOperand(ExpOps - 3).getImm();
+  return 0;
 }
 
 void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,

@@ -44,13 +44,39 @@ class ARC4Inst<dag outs, dag ins, string asmstr, list<dag> pattern>
   let Namespace = "ARC4";
   let Size = 4;
 
-  // TSFlags bit 0: HasLimm — instruction has a 32-bit LIMM extra word.
-  // Used by MCCodeEmitter to emit the second word. The TableGen Inst
-  // field is always 32 bits (the first word only); Size is always 4
-  // so the decoder generates a single 32-bit table. The disassembler
-  // and code emitter check HasLimm to handle the second word.
+  // TSFlags — instruction property bits queried by MCCodeEmitter,
+  // AsmParser, InstPrinter, and Disassembler.
+  //
+  // Bit 0: HasLimm    — 32-bit LIMM extra word follows instruction
+  // Bit 1: IsShimm    — shimm sentinel (61/63) in B or C field
+  // Bit 2: HasFQ      — has .f and .q suffix operands (non-shimm ALU/SOP)
+  // Bit 3: HasFOnly   — has .f suffix only, no .q (shimm ALU/SOP)
+  // Bit 4: HasQN      — has .q and .n suffix operands (branch)
+  // Bit 5: HasFQN     — has .f, .q, .n suffix operands (jump)
+  // Bit 6: HasLdMod3  — has 3 load modifiers (x, w/W, e/E)
+  // Bit 7: HasLdMod2  — has 2 load modifiers (x/X, e/E, no writeback)
+  // Bit 8: HasStMod2  — has 2 store modifiers (v, D)
+  // Bit 9: HasStMod1  — has 1 store modifier (D only)
   bits<1> HasLimm = 0;
+  bits<1> IsShimm = 0;
+  bits<1> HasFQ = 0;
+  bits<1> HasFOnly = 0;
+  bits<1> HasQN = 0;
+  bits<1> HasFQN = 0;
+  bits<1> HasLdMod3 = 0;
+  bits<1> HasLdMod2 = 0;
+  bits<1> HasStMod2 = 0;
+  bits<1> HasStMod1 = 0;
   let TSFlags{0} = HasLimm;
+  let TSFlags{1} = IsShimm;
+  let TSFlags{2} = HasFQ;
+  let TSFlags{3} = HasFOnly;
+  let TSFlags{4} = HasQN;
+  let TSFlags{5} = HasFQN;
+  let TSFlags{6} = HasLdMod3;
+  let TSFlags{7} = HasLdMod2;
+  let TSFlags{8} = HasStMod2;
+  let TSFlags{9} = HasStMod1;
 
   field bits<32> Inst;
   field bits<32> SoftFail = 0;
@@ -81,6 +107,7 @@ class ARC4Inst8<dag outs, dag ins, string asmstr, list<dag> pattern>
 class ARC4InstALU3_rrr<bits<5> opcode, dag outs, dag ins, string asmstr,
                        list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasFQ = 1;
   bits<6> a;
   bits<6> b;
   bits<6> c;
@@ -103,6 +130,8 @@ class ARC4InstALU3_rrr<bits<5> opcode, dag outs, dag ins, string asmstr,
 class ARC4InstALU3_rrs<bits<5> opcode, dag outs, dag ins, string asmstr,
                        list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let IsShimm = 1;
+  let HasFOnly = 1;
   bits<6> a;
   bits<6> b;
   bits<9> shimm;
@@ -120,6 +149,8 @@ class ARC4InstALU3_rrs<bits<5> opcode, dag outs, dag ins, string asmstr,
 class ARC4InstALU3_rsr<bits<5> opcode, dag outs, dag ins, string asmstr,
                        list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let IsShimm = 1;
+  let HasFOnly = 1;
   bits<6> a;
   bits<6> c;
   bits<9> shimm;
@@ -137,6 +168,8 @@ class ARC4InstALU3_rsr<bits<5> opcode, dag outs, dag ins, string asmstr,
 class ARC4InstALU3_rss<bits<5> opcode, dag outs, dag ins, string asmstr,
                        list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let IsShimm = 1;
+  let HasFOnly = 1;
   bits<6> a;
   bits<9> shimm;
   bits<1> f;   // NOT wired to encoding — MCCodeEmitter flips sentinel 63->61
@@ -153,6 +186,7 @@ class ARC4InstALU3_rss<bits<5> opcode, dag outs, dag ins, string asmstr,
 class ARC4InstALU3_rrl<bits<5> opcode, dag outs, dag ins, string asmstr,
                        list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasFQ = 1;
   bits<6> a;
   bits<6> b;
   bits<1> f;   // flag bit, wired to bit [8]
@@ -172,6 +206,7 @@ class ARC4InstALU3_rrl<bits<5> opcode, dag outs, dag ins, string asmstr,
 class ARC4InstALU3_rlr<bits<5> opcode, dag outs, dag ins, string asmstr,
                        list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasFQ = 1;
   bits<6> a;
   bits<6> c;
   bits<1> f;   // flag bit, wired to bit [8]
@@ -196,6 +231,7 @@ class ARC4InstALU3_rlr<bits<5> opcode, dag outs, dag ins, string asmstr,
 class ARC4InstSOP_rr<bits<6> subop, dag outs, dag ins, string asmstr,
                      list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasFQ = 1;
   bits<6> a;
   bits<6> b;
   bits<1> f;   // flag bit, wired to bit [8]
@@ -215,6 +251,8 @@ class ARC4InstSOP_rr<bits<6> subop, dag outs, dag ins, string asmstr,
 class ARC4InstSOP_rs<bits<6> subop, dag outs, dag ins, string asmstr,
                      list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let IsShimm = 1;
+  let HasFOnly = 1;
   bits<6> a;
   bits<9> shimm;
   bits<1> f;   // NOT wired to encoding — MCCodeEmitter flips sentinel 63->61
@@ -231,6 +269,7 @@ class ARC4InstSOP_rs<bits<6> subop, dag outs, dag ins, string asmstr,
 class ARC4InstSOP_rl<bits<6> subop, dag outs, dag ins, string asmstr,
                      list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasFQ = 1;
   bits<6> a;
   bits<1> f;   // flag bit, wired to bit [8]
   bits<5> q;   // condition code, wired to bits [4:0]
@@ -255,6 +294,7 @@ class ARC4InstSOP_rl<bits<6> subop, dag outs, dag ins, string asmstr,
 class ARC4InstBranch<bits<5> opcode, dag outs, dag ins, string asmstr,
                      list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasQN = 1;
   bits<20> offset;
   bits<2>  n;
   bits<5>  q;
@@ -283,6 +323,7 @@ class ARC4InstBranch<bits<5> opcode, dag outs, dag ins, string asmstr,
 class ARC4InstJumpReg<bit link, dag outs, dag ins, string asmstr,
                       list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasFQN = 1;
   bits<6> b;
   bits<1> f;   // flag bit, wired to bit [8]
   bits<2> n;
@@ -303,6 +344,7 @@ class ARC4InstJumpReg<bit link, dag outs, dag ins, string asmstr,
 class ARC4InstJumpLimm<bit link, dag outs, dag ins, string asmstr,
                        list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasFQN = 1;
   bits<1> f;   // flag bit, wired to bit [8]
   bits<2> n;
   bits<5> q;
@@ -330,6 +372,7 @@ class ARC4InstJumpLimm<bit link, dag outs, dag ins, string asmstr,
 // --- LD0 reg,reg: ld a, [b, c] ---
 class ARC4InstLD0_rr<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasLdMod3 = 1;
   bits<6> a;
   bits<6> b;
   bits<6> c;
@@ -354,6 +397,7 @@ class ARC4InstLD0_rr<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- LD0 reg,limm: ld a, [b, limm] ---  C = 62
 class ARC4InstLD0_rl<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasLdMod3 = 1;
   bits<6> a;
   bits<6> b;
   bits<1> e;
@@ -377,6 +421,7 @@ class ARC4InstLD0_rl<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- LD0 limm,reg: ld a, [limm, c] ---  B = 62, no writeback
 class ARC4InstLD0_lr<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasLdMod2 = 1;
   bits<6> a;
   bits<6> c;
   bits<1> e;
@@ -407,6 +452,7 @@ class ARC4InstLD0_lr<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- LD1 reg,shimm: ld a, [b, shimm] ---
 class ARC4InstLD1_rs<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasLdMod3 = 1;
   bits<6> a;
   bits<6> b;
   bits<1> E;   // cache bypass, bit 14
@@ -429,6 +475,7 @@ class ARC4InstLD1_rs<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- LD1 shimm,shimm: ld a, [shimm, shimm] ---  B = sentinel 63, no wb
 class ARC4InstLD1_ss<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasLdMod2 = 1;
   bits<6> a;
   bits<1> E;
   bits<2> Z;
@@ -449,6 +496,7 @@ class ARC4InstLD1_ss<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- LD1 limm: ld a, [limm] ---  B = sentinel 62, shimm = 0, no wb. Size = 8.
 class ARC4InstLD1_l<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasLdMod2 = 1;
   bits<6> a;
   bits<1> E;
   bits<2> Z;
@@ -478,6 +526,7 @@ class ARC4InstLD1_l<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- ST reg, [reg, shimm]: st c, [b, offset] ---
 class ARC4InstST_rrs<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasStMod2 = 1;
   bits<1> D;   // cache bypass, bit 26
   bits<1> v;   // writeback, bit 24
   bits<2> y;   // size, bits 23:22
@@ -499,6 +548,7 @@ class ARC4InstST_rrs<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- ST shimm, [reg, shimm]: st shimm, [b, offset] --- C = sentinel 63
 class ARC4InstST_srs<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasStMod2 = 1;
   bits<1> D;
   bits<1> v;
   bits<2> y;
@@ -519,6 +569,7 @@ class ARC4InstST_srs<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- ST reg, [shimm, shimm]: st c, [shimm, offset] --- B = sentinel 63
 class ARC4InstST_rss<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasStMod1 = 1;
   bits<1> D;
   bits<2> y;
   bits<6> c;
@@ -538,6 +589,7 @@ class ARC4InstST_rss<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- ST shimm, [shimm, shimm]: all shimm --- B and C = sentinel 63
 class ARC4InstST_sss<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
+  let HasStMod1 = 1;
   bits<1> D;
   bits<2> y;
   bits<9> offset;
@@ -556,6 +608,7 @@ class ARC4InstST_sss<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- ST reg, [limm, shimm]: st c, [limm, offset] --- B = sentinel 62. Size=8.
 class ARC4InstST_rls<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasStMod1 = 1;
   bits<1> D;
   bits<2> y;
   bits<6> c;
@@ -575,6 +628,7 @@ class ARC4InstST_rls<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- ST limm, [reg, shimm]: st limm, [b, offset] --- C = sentinel 62. Size=8.
 class ARC4InstST_lrs<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasStMod2 = 1;
   bits<1> D;
   bits<1> v;
   bits<2> y;
@@ -595,6 +649,7 @@ class ARC4InstST_lrs<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- ST limm, [limm, shimm]: both limm --- B and C = sentinel 62. Size=8.
 class ARC4InstST_lls<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasStMod1 = 1;
   bits<1> D;
   bits<2> y;
   bits<9> offset;
@@ -616,6 +671,7 @@ class ARC4InstST_lls<dag outs, dag ins, string asmstr, list<dag> pattern>
 // The assembler adjusts the limm: limm_encoded = address - shimm.
 class ARC4InstST_sls<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  let HasStMod1 = 1;
   bits<1> D;
   bits<2> y;
   bits<9> offset;  // shimm value (= stored value = offset)

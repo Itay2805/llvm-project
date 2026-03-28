@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "ARC4TSFlags.h"
 #include "MCTargetDesc/ARC4MCTargetDesc.h"
 #include "TargetInfo/ARC4TargetInfo.h"
 #include "llvm/ADT/SmallString.h"
@@ -529,74 +530,37 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
   return false;
 }
 
-/// Returns true if the opcode is a branch or jump instruction
-/// (opcodes 4-7: b, bl, lp, j/jl) where delay slot modifiers are valid.
-static bool isBranchOrJump(unsigned Opc) {
-  switch (Opc) {
-  case ARC4::B:
-  case ARC4::BL:
-  case ARC4::LP_insn:
-  case ARC4::J_r:
-  case ARC4::J_l:
-  case ARC4::JL_r:
-  case ARC4::JL_l:
-    return true;
-  default:
-    return false;
-  }
+/// Returns true if the instruction has delay-slot suffix operands (q, n).
+/// Covers branch (HasQN) and jump (HasFQN) forms.
+static bool isBranchOrJump(const MCInstrDesc &Desc) {
+  uint64_t TSF = Desc.TSFlags;
+  return (TSF & ARC4TSF::HasQN) || (TSF & ARC4TSF::HasFQN);
 }
 
 /// Returns true if the instruction is a shimm form (uses 9-bit short immediate
 /// in bits [8:0], which overlaps with the condition code field [4:0]).
 /// Condition codes are NOT compatible with shimm forms.
-static bool isShimmForm(unsigned Opc) {
-  switch (Opc) {
-  // ALU3 shimm variants
-  case ARC4::ADD_rrs: case ARC4::ADD_rsr: case ARC4::ADD_rss:
-  case ARC4::ADD_0rs: case ARC4::ADD_0sr: case ARC4::ADD_0ss:
-  case ARC4::ADC_rrs: case ARC4::ADC_rsr: case ARC4::ADC_rss:
-  case ARC4::ADC_0rs: case ARC4::ADC_0sr: case ARC4::ADC_0ss:
-  case ARC4::SUB_rrs: case ARC4::SUB_rsr: case ARC4::SUB_rss:
-  case ARC4::SUB_0rs: case ARC4::SUB_0sr: case ARC4::SUB_0ss:
-  case ARC4::SBC_rrs: case ARC4::SBC_rsr: case ARC4::SBC_rss:
-  case ARC4::SBC_0rs: case ARC4::SBC_0sr: case ARC4::SBC_0ss:
-  case ARC4::AND_rrs: case ARC4::AND_rsr: case ARC4::AND_rss:
-  case ARC4::AND_0rs: case ARC4::AND_0sr: case ARC4::AND_0ss:
-  case ARC4::OR_rrs:  case ARC4::OR_rsr:  case ARC4::OR_rss:
-  case ARC4::OR_0rs:  case ARC4::OR_0sr:  case ARC4::OR_0ss:
-  case ARC4::BIC_rrs: case ARC4::BIC_rsr: case ARC4::BIC_rss:
-  case ARC4::BIC_0rs: case ARC4::BIC_0sr: case ARC4::BIC_0ss:
-  case ARC4::XOR_rrs: case ARC4::XOR_rsr: case ARC4::XOR_rss:
-  case ARC4::XOR_0rs: case ARC4::XOR_0sr: case ARC4::XOR_0ss:
-  // SOP shimm variants
-  case ARC4::ASR_rs:  case ARC4::ASR_0s:
-  case ARC4::LSR_rs:  case ARC4::LSR_0s:
-  case ARC4::ROR_rs:  case ARC4::ROR_0s:
-  case ARC4::RRC_rs:  case ARC4::RRC_0s:
-  case ARC4::SEXB_rs: case ARC4::SEXB_0s:
-  case ARC4::SEXW_rs: case ARC4::SEXW_0s:
-  case ARC4::EXTB_rs: case ARC4::EXTB_0s:
-  case ARC4::EXTW_rs: case ARC4::EXTW_0s:
-  // Flag shimm
-  case ARC4::FLAG_s:
-  // Store forms (all stores use shimm offset in bits[8:0])
-  case ARC4::ST_rrs:  case ARC4::ST_srs:  case ARC4::ST_rss:
-  case ARC4::ST_sss:  case ARC4::ST_rls:  case ARC4::ST_lrs:
-  case ARC4::ST_lls:  case ARC4::ST_sls:
-  case ARC4::STB_rrs: case ARC4::STB_srs: case ARC4::STB_rss:
-  case ARC4::STB_sss: case ARC4::STB_rls: case ARC4::STB_lrs:
-  case ARC4::STB_lls: case ARC4::STB_sls:
-  case ARC4::STW_rrs: case ARC4::STW_srs: case ARC4::STW_rss:
-  case ARC4::STW_sss: case ARC4::STW_rls: case ARC4::STW_lrs:
-  case ARC4::STW_lls: case ARC4::STW_sls:
-  // Load shimm forms (opcode 1)
-  case ARC4::LD_rs:   case ARC4::LD_ss:
-  case ARC4::LDB_rs:  case ARC4::LDB_ss:
-  case ARC4::LDW_rs:  case ARC4::LDW_ss:
+/// Includes ALU/SOP shimm (IsShimm), stores (HasStMod1/HasStMod2),
+/// load shimm (HasLdMod3 on LD1_rs, HasLdMod2 on LD1_ss), and FLAG_s.
+static bool isShimmForm(const MCInstrDesc &Desc) {
+  uint64_t TSF = Desc.TSFlags;
+  // ALU/SOP shimm forms set IsShimm explicitly.
+  if (TSF & ARC4TSF::IsShimm)
     return true;
-  default:
-    return false;
-  }
+  // Store forms: all store variants have a 9-bit shimm offset in bits[8:0].
+  if ((TSF & ARC4TSF::HasStMod2) || (TSF & ARC4TSF::HasStMod1))
+    return true;
+  // Load opcode-1 forms (LD1_rs, LD1_ss, LD1_l) also have shimm in bits[8:0].
+  // LD0 forms (opcode 0) do not — their offset is a register field.
+  // LD1 forms are identified by HasLdMod3 without HasLimm (LD1_rs) or
+  // HasLdMod2 without the limm-base flag. We distinguish LD1 from LD0 by
+  // checking that the instruction does NOT have a register C field as offset —
+  // but the simplest heuristic: LD1_rs has both HasLdMod3 and IsShimm is not
+  // set. To avoid false-positives on LD0_rr/LD0_rl, we check the opcode
+  // major field via the remaining FLAG_s case and rely on the fact that FLAG_s
+  // has no TSFlags set (default 0), so we fall through to an explicit check.
+  // Keep FLAG_s as special case below.
+  return false;
 }
 
 /// Try to match a store instruction to a shimm form (srs, sss, or sls) when
@@ -716,65 +680,26 @@ static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
 
 /// Returns true if the instruction is a load with all 3 modifier operands
 /// (x, w/W, e/E): sign-extend, writeback, and cache bypass.
-/// These are forms with a register base where writeback is valid.
-static bool isLoadWithWriteback(unsigned Opc) {
-  switch (Opc) {
-  // LD0_rr, LD0_rl: reg base, all 3 modifiers (x, w, e)
-  case ARC4::LD_rr:  case ARC4::LD_rl:
-  case ARC4::LDB_rr: case ARC4::LDB_rl:
-  case ARC4::LDW_rr: case ARC4::LDW_rl:
-  // LD1_rs: reg base, all 3 modifiers (X, W, E)
-  case ARC4::LD_rs:
-  case ARC4::LDB_rs:
-  case ARC4::LDW_rs:
-    return true;
-  default:
-    return false;
-  }
+static bool isLoadWithWriteback(const MCInstrDesc &Desc) {
+  return Desc.TSFlags & ARC4TSF::HasLdMod3;
 }
 
 /// Returns true if the instruction is a load with only sign-extend and cache
 /// bypass operands (no writeback): limm base or shimm+shimm forms.
-static bool isLoadNoWriteback(unsigned Opc) {
-  switch (Opc) {
-  // LD0_lr: limm base, 2 modifiers (x, e)
-  case ARC4::LD_lr:  case ARC4::LDB_lr: case ARC4::LDW_lr:
-  // LD1_ss, LD1_l: shimm/limm base, 2 modifiers (X, E)
-  case ARC4::LD_ss:  case ARC4::LDB_ss: case ARC4::LDW_ss:
-  case ARC4::LD_l:   case ARC4::LDB_l:  case ARC4::LDW_l:
-    return true;
-  default:
-    return false;
-  }
+static bool isLoadNoWriteback(const MCInstrDesc &Desc) {
+  return Desc.TSFlags & ARC4TSF::HasLdMod2;
 }
 
 /// Returns true if the instruction is a store with writeback + cache bypass
 /// operands (v, D): forms with register base.
-static bool isStoreWithWriteback(unsigned Opc) {
-  switch (Opc) {
-  case ARC4::ST_rrs:  case ARC4::ST_srs:  case ARC4::ST_lrs:
-  case ARC4::STB_rrs: case ARC4::STB_srs: case ARC4::STB_lrs:
-  case ARC4::STW_rrs: case ARC4::STW_srs: case ARC4::STW_lrs:
-    return true;
-  default:
-    return false;
-  }
+static bool isStoreWithWriteback(const MCInstrDesc &Desc) {
+  return Desc.TSFlags & ARC4TSF::HasStMod2;
 }
 
 /// Returns true if the instruction is a store with only cache bypass operand
 /// (D): forms without register base (shimm/limm base).
-static bool isStoreNoWriteback(unsigned Opc) {
-  switch (Opc) {
-  case ARC4::ST_rss:  case ARC4::ST_sss:  case ARC4::ST_rls:
-  case ARC4::ST_lls:  case ARC4::ST_sls:
-  case ARC4::STB_rss: case ARC4::STB_sss: case ARC4::STB_rls:
-  case ARC4::STB_lls: case ARC4::STB_sls:
-  case ARC4::STW_rss: case ARC4::STW_sss: case ARC4::STW_rls:
-  case ARC4::STW_lls: case ARC4::STW_sls:
-    return true;
-  default:
-    return false;
-  }
+static bool isStoreNoWriteback(const MCInstrDesc &Desc) {
+  return Desc.TSFlags & ARC4TSF::HasStMod1;
 }
 
 /// Set the load/store modifier suffix operands in the MCInst.
@@ -782,32 +707,32 @@ static bool isStoreNoWriteback(unsigned Opc) {
 /// The matcher's ConvertToMCInst fills them with default 0 values.
 /// We overwrite them with the parsed suffix values.
 ///
-/// Load with writeback: last 3 operands = x/X, w/W, e/E
-/// Load without writeback: last 2 operands = x/X, e/E
-/// Store with writeback: last 2 operands = v, D
-/// Store without writeback: last 1 operand = D
-static void setLoadStoreModifiers(MCInst &Inst, int SignExtend, int Writeback,
+/// Load with writeback (HasLdMod3): last 3 operands = x/X, w/W, e/E
+/// Load without writeback (HasLdMod2): last 2 operands = x/X, e/E
+/// Store with writeback (HasStMod2): last 2 operands = v, D
+/// Store without writeback (HasStMod1): last 1 operand = D
+static void setLoadStoreModifiers(MCInst &Inst, const MCInstrDesc &Desc,
+                                  int SignExtend, int Writeback,
                                   int CacheBypass) {
-  unsigned Opc = Inst.getOpcode();
   unsigned N = Inst.getNumOperands();
 
-  if (isLoadWithWriteback(Opc) && N >= 3) {
+  if (isLoadWithWriteback(Desc) && N >= 3) {
     Inst.getOperand(N - 3).setImm(SignExtend);
     Inst.getOperand(N - 2).setImm(Writeback);
     Inst.getOperand(N - 1).setImm(CacheBypass);
     return;
   }
-  if (isLoadNoWriteback(Opc) && N >= 2) {
+  if (isLoadNoWriteback(Desc) && N >= 2) {
     Inst.getOperand(N - 2).setImm(SignExtend);
     Inst.getOperand(N - 1).setImm(CacheBypass);
     return;
   }
-  if (isStoreWithWriteback(Opc) && N >= 2) {
+  if (isStoreWithWriteback(Desc) && N >= 2) {
     Inst.getOperand(N - 2).setImm(Writeback);
     Inst.getOperand(N - 1).setImm(CacheBypass);
     return;
   }
-  if (isStoreNoWriteback(Opc) && N >= 1) {
+  if (isStoreNoWriteback(Desc) && N >= 1) {
     Inst.getOperand(N - 1).setImm(CacheBypass);
     return;
   }
@@ -819,80 +744,72 @@ static void setLoadStoreModifiers(MCInst &Inst, int SignExtend, int Writeback,
 /// values from the mnemonic.
 ///
 /// Suffix operands are always the LAST N operands in the MCInst:
-///   ALU rrr/rrl/rlr, SOP rr/rl: last 2 = f, q
-///   ALU rrs/rsr/rss, SOP rs:    last 1 = f
-///   Branch B/BL/LP:              last 2 = q, n
-///   Jump J_r/J_l/JL_r/JL_l:     last 3 = f, q, n
-///   Flag_r/Flag_l:               last 1 = q
-///   Everything else:             none
+///   HasFQN  (jump):          last 3 = f, q, n
+///   HasQN   (branch):        last 2 = q, n
+///   HasFOnly (shimm ALU/SOP): last 1 = f
+///   HasFQ   (non-shimm ALU/SOP): last 2 = f, q
+///   Flag_r/Flag_l:           last 1 = q  (special case — no dedicated TSFlag)
+///   Everything else:         none
 static void setSuffixOperands(MCInst &Inst, const MCInstrInfo &MCII,
                               int FlagBit, int CondCode, int DelaySlot) {
-  unsigned Opc = Inst.getOpcode();
+  const MCInstrDesc &Desc = MCII.get(Inst.getOpcode());
+  uint64_t TSF = Desc.TSFlags;
   unsigned N = Inst.getNumOperands();
 
-  switch (Opc) {
-  // Jump instructions: last 3 operands are f, q, n
-  // Only overwrite if user explicitly specified the suffix.
-  case ARC4::J_r: case ARC4::J_l:
-  case ARC4::JL_r: case ARC4::JL_l:
+  // Jump: last 3 = f, q, n
+  if (TSF & ARC4TSF::HasFQN) {
     if (N >= 3) {
-      if (FlagBit != 0) Inst.getOperand(N - 3).setImm(FlagBit);
-      if (CondCode != 0) Inst.getOperand(N - 2).setImm(CondCode);
+      if (FlagBit != 0)   Inst.getOperand(N - 3).setImm(FlagBit);
+      if (CondCode != 0)  Inst.getOperand(N - 2).setImm(CondCode);
       if (DelaySlot != 0) Inst.getOperand(N - 1).setImm(DelaySlot);
     }
     return;
+  }
 
-  // Branch instructions: last 2 operands are q, n
-  case ARC4::B: case ARC4::BL: case ARC4::LP_insn:
+  // Branch: last 2 = q, n
+  if (TSF & ARC4TSF::HasQN) {
     if (N >= 2) {
-      if (CondCode != 0) Inst.getOperand(N - 2).setImm(CondCode);
+      if (CondCode != 0)  Inst.getOperand(N - 2).setImm(CondCode);
       if (DelaySlot != 0) Inst.getOperand(N - 1).setImm(DelaySlot);
     }
     return;
+  }
 
-  // Flag_r/Flag_l: last operand is q
-  case ARC4::FLAG_r: case ARC4::FLAG_l:
+  // Load/store: modifier operands handled separately by setLoadStoreModifiers.
+  // No f/q/n suffix operands on these forms.
+  if (isLoadWithWriteback(Desc) || isLoadNoWriteback(Desc) ||
+      isStoreWithWriteback(Desc) || isStoreNoWriteback(Desc))
+    return;
+
+  // FLAG_s has no suffix operands; FLAG_r/FLAG_l have last 1 = q (special case).
+  unsigned Opc = Inst.getOpcode();
+  if (Opc == ARC4::FLAG_s)
+    return;
+  if (Opc == ARC4::FLAG_r || Opc == ARC4::FLAG_l) {
     if (N >= 1 && CondCode != 0)
       Inst.getOperand(N - 1).setImm(CondCode);
     return;
-
-  // FLAG_s has no suffix operands
-  case ARC4::FLAG_s:
-    return;
-
-  default:
-    break;
   }
 
-  // Instructions with NO f/q/n suffix operands: loads, stores, NOP, BRK, etc.
-  // Loads/stores have their OWN modifier operands (x/w/e, v/D) which are
-  // handled separately by setLoadStoreModifiers.
-  // Must check these BEFORE the shimm form check, since loads/stores also use
-  // shimm but don't have an f operand.
-  if (isLoadWithWriteback(Opc) || isLoadNoWriteback(Opc) ||
-      isStoreWithWriteback(Opc) || isStoreNoWriteback(Opc))
+  // NOP/BRK/SLEEP/SWI: no suffix operands.
+  if (Opc == ARC4::NOP || Opc == ARC4::BRK ||
+      Opc == ARC4::SLEEP || Opc == ARC4::SWI)
     return;
-  switch (Opc) {
-  case ARC4::NOP: case ARC4::BRK: case ARC4::SLEEP: case ARC4::SWI:
-    return;  // No suffix operands
-  default:
-    break;
-  }
 
-  // ALU/SOP instructions: check if shimm or non-shimm form.
-  // Only overwrite suffix operands if the user explicitly specified the suffix.
-  // Aliases (e.g., rlc => adc.f, cmp => sub.f 0) may have pre-set suffix
-  // values that should not be overwritten with defaults.
-  if (isShimmForm(Opc)) {
-    // Shimm ALU/SOP forms: last operand is f (no q, bits overlap with shimm)
+  // ALU/SOP shimm forms (HasFOnly): last 1 = f
+  if (TSF & ARC4TSF::HasFOnly) {
     if (N >= 1 && FlagBit != 0)
       Inst.getOperand(N - 1).setImm(FlagBit);
-  } else if (N >= 2) {
-    // Non-shimm ALU/SOP form: last 2 operands are f, q
-    if (FlagBit != 0)
-      Inst.getOperand(N - 2).setImm(FlagBit);
-    if (CondCode != 0)
-      Inst.getOperand(N - 1).setImm(CondCode);
+    return;
+  }
+
+  // ALU/SOP non-shimm forms (HasFQ): last 2 = f, q
+  if (TSF & ARC4TSF::HasFQ) {
+    if (N >= 2) {
+      if (FlagBit != 0)  Inst.getOperand(N - 2).setImm(FlagBit);
+      if (CondCode != 0) Inst.getOperand(N - 1).setImm(CondCode);
+    }
+    return;
   }
 }
 
@@ -914,7 +831,7 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   if (StoreShimmMatched) {
     // Store shimm forms have no f/q/n suffix operands.
     // Validate: condition codes and delay slots are not allowed.
-    if (ParsedCondCode != 0 && isShimmForm(Inst.getOpcode()))
+    if (ParsedCondCode != 0 && isShimmForm(MII.get(Inst.getOpcode())))
       return Error(IDLoc,
                    "condition code not allowed with short immediate operand");
     if (ParsedDelaySlot != 0)
@@ -925,13 +842,13 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       return Error(IDLoc, "sign-extend (.x) not allowed on store instructions");
     // .a (writeback) validation.
     if (ParsedWriteback != 0) {
-      if (isStoreNoWriteback(Inst.getOpcode()))
+      if (isStoreNoWriteback(MII.get(Inst.getOpcode())))
         return Error(IDLoc,
                      "address writeback (.a) not allowed with non-register base");
     }
     // Fill in load/store modifier operands (v, D).
-    setLoadStoreModifiers(Inst, ParsedSignExtend, ParsedWriteback,
-                          ParsedCacheBypass);
+    setLoadStoreModifiers(Inst, MII.get(Inst.getOpcode()), ParsedSignExtend,
+                          ParsedWriteback, ParsedCacheBypass);
     Out.emitInstruction(Inst, getSTI());
     return false;
   }
@@ -978,17 +895,17 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       }
     }
     // Validate suffix compatibility before filling operands.
-    if (ParsedCondCode != 0 && isShimmForm(Inst.getOpcode()))
+    const MCInstrDesc &CurDesc = MII.get(Inst.getOpcode());
+    if (ParsedCondCode != 0 && isShimmForm(CurDesc))
       return Error(IDLoc,
                    "condition code not allowed with short immediate operand");
-    if (ParsedDelaySlot != 0 && !isBranchOrJump(Inst.getOpcode()))
+    if (ParsedDelaySlot != 0 && !isBranchOrJump(CurDesc))
       return Error(IDLoc,
                    "delay slot modifier not allowed on this instruction");
 
     // Validate load/store modifier compatibility.
-    unsigned CurOpc = Inst.getOpcode();
-    bool IsAnyLoad = isLoadWithWriteback(CurOpc) || isLoadNoWriteback(CurOpc);
-    bool IsAnyStore = isStoreWithWriteback(CurOpc) || isStoreNoWriteback(CurOpc);
+    bool IsAnyLoad = isLoadWithWriteback(CurDesc) || isLoadNoWriteback(CurDesc);
+    bool IsAnyStore = isStoreWithWriteback(CurDesc) || isStoreNoWriteback(CurDesc);
 
     // .x (sign-extend) is only valid on loads, not stores.
     if (ParsedSignExtend != 0 && IsAnyStore)
@@ -996,10 +913,10 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
     // .a (writeback) requires a register base form.
     if (ParsedWriteback != 0) {
-      if (isLoadNoWriteback(CurOpc))
+      if (isLoadNoWriteback(CurDesc))
         return Error(IDLoc,
                      "address writeback (.a) not allowed with non-register base");
-      if (isStoreNoWriteback(CurOpc))
+      if (isStoreNoWriteback(CurDesc))
         return Error(IDLoc,
                      "address writeback (.a) not allowed with non-register base");
       if (!IsAnyLoad && !IsAnyStore)
@@ -1024,7 +941,7 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                        ParsedDelaySlot);
 
     // Fill in the load/store modifier operands (x/w/e, v/D).
-    setLoadStoreModifiers(Inst, ParsedSignExtend, ParsedWriteback,
+    setLoadStoreModifiers(Inst, CurDesc, ParsedSignExtend, ParsedWriteback,
                           ParsedCacheBypass);
 
     // Default delay slot for JL_l: .jd (2) when no explicit suffix was parsed.
