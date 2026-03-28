@@ -30,11 +30,11 @@ public:
     default:
       llvm_unreachable("Invalid fixup kind!");
     case FK_Data_4:
-      return 4; // R_ARC_32
+      return ELF::R_ARC_32;
     case ARC4::fixup_arc4_b26:
-      return 5; // R_ARC_B26
+      return ELF::R_ARC_B26;
     case ARC4::fixup_arc4_b22_pcrel:
-      return 6; // R_ARC_B22_PCREL
+      return ELF::R_ARC_B22_PCREL;
     }
   }
 };

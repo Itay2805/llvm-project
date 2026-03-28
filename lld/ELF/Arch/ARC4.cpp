@@ -28,13 +28,7 @@ using namespace lld::elf;
 
 namespace {
 
-// ARC4 relocation types (from binutils-2.15/include/elf/arc.h).
-enum {
-  R_ARC_NONE     = 0,
-  R_ARC_32       = 4, // 32-bit absolute
-  R_ARC_B26      = 5, // 26-bit absolute branch: val>>2 stored in bits [23:0]
-  R_ARC_B22_PCREL = 6, // 20-bit PC-relative branch offset in bits [26:7]
-};
+// Use ELF::R_ARC_* constants from ARC.def (shared with ARCompact).
 
 class ARC4 final : public TargetInfo {
 public:
@@ -57,12 +51,12 @@ ARC4::ARC4(Ctx &ctx) : TargetInfo(ctx) {
 RelExpr ARC4::getRelExpr(RelType type, const Symbol &s,
                          const uint8_t *loc) const {
   switch (type) {
-  case R_ARC_NONE:
+  case ELF::R_ARC_NONE:
     return R_NONE;
-  case R_ARC_B22_PCREL:
+  case ELF::R_ARC_B22_PCREL:
     return R_PC;
-  case R_ARC_32:
-  case R_ARC_B26:
+  case ELF::R_ARC_32:
+  case ELF::R_ARC_B26:
   default:
     return R_ABS;
   }
@@ -70,15 +64,15 @@ RelExpr ARC4::getRelExpr(RelType type, const Symbol &s,
 
 void ARC4::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   switch (rel.type) {
-  case R_ARC_NONE:
+  case ELF::R_ARC_NONE:
     break;
 
-  case R_ARC_32:
+  case ELF::R_ARC_32:
     checkIntUInt(ctx, loc, val, 32, rel);
     write32le(loc, val);
     break;
 
-  case R_ARC_B26: {
+  case ELF::R_ARC_B26: {
     // 26-bit absolute branch.  The branch offset is val>>2, stored in
     // instruction bits [23:0].
     int64_t sval = static_cast<int64_t>(val);
@@ -91,7 +85,7 @@ void ARC4::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     break;
   }
 
-  case R_ARC_B22_PCREL: {
+  case ELF::R_ARC_B22_PCREL: {
     // 20-bit PC-relative branch offset in bits [26:7].
     // ARC4 branch offset is relative to delay slot (PC+4), not the branch
     // instruction itself. Subtract 4 to adjust.

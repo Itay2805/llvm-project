@@ -2,15 +2,13 @@
 ; RUN: llvm-readelf -r %t.o | FileCheck %s
 
 ; Test that symbol references produce correct relocations.
-; Reloc type values: 5 = R_ARC_B26, 6 = R_ARC_B22_PCREL
-; (readelf shows "Unknown" since ARC4-specific reloc names aren't registered)
 
-; b and bl use B22_PCREL (type 6) — PC-relative, word-aligned
-; CHECK: 00000106
-; CHECK: 00000106
+; b and bl use R_ARC_B22_PCREL — PC-relative, word-aligned
+; CHECK: R_ARC_B22_PCREL
+; CHECK: R_ARC_B22_PCREL
 
-; jl limm uses B26 (type 5) — absolute, word-aligned
-; CHECK: 00000105
+; jl limm uses R_ARC_B26 — absolute, word-aligned
+; CHECK: R_ARC_B26
 
   .text
   .globl __start

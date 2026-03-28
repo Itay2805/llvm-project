@@ -68,6 +68,7 @@ StringRef llvm::object::getELFRelocationTypeName(uint32_t Machine,
       break;
     }
     break;
+  case ELF::EM_ARC:
   case ELF::EM_ARC_COMPACT:
   case ELF::EM_ARC_COMPACT2:
     switch (Type) {
@@ -217,6 +218,7 @@ uint32_t llvm::object::getELFRelativeRelocationType(uint32_t Machine) {
     return ELF::R_AARCH64_RELATIVE;
   case ELF::EM_ARM:
     return ELF::R_ARM_RELATIVE;
+  case ELF::EM_ARC:
   case ELF::EM_ARC_COMPACT:
   case ELF::EM_ARC_COMPACT2:
     return ELF::R_ARC_RELATIVE;
