@@ -15,8 +15,11 @@ namespace llvm {
 namespace ARC4 {
 
 enum Fixups {
+  // 26-bit absolute branch target (R_ARC_B26), right-shift 2, bits [23:0]
   fixup_arc4_b26 = FirstTargetFixupKind,
+  // 22-bit PC-relative branch (R_ARC_B22_PCREL), right-shift 2, bits [28:7]
   fixup_arc4_b22_pcrel,
+
   fixup_arc4_invalid,
   NumTargetFixupKinds = fixup_arc4_invalid - FirstTargetFixupKind
 };

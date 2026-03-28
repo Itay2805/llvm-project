@@ -45,34 +45,36 @@ public:
     if (!IsResolved)
       Asm->getWriter().recordRelocation(F, Fixup, Target, Value);
 
-    unsigned Offset = Fixup.getOffset();
+    // Note: Data already points to the fixup location within the fragment
+    // (MCAssembler sets Data = Contents.data() + Fixup.getOffset()), so we
+    // write directly at Data without adding any offset.
 
     switch (Fixup.getKind()) {
     default:
       break;
     case FK_Data_1:
-      Data[Offset] = Value;
+      *Data = Value;
       return;
     case FK_Data_2:
-      support::endian::write<uint16_t>(&Data[Offset], Value,
+      support::endian::write<uint16_t>(Data, Value,
                                         llvm::endianness::little);
       return;
     case FK_Data_4:
-      support::endian::write<uint32_t>(&Data[Offset], Value,
+      support::endian::write<uint32_t>(Data, Value,
                                         llvm::endianness::little);
       return;
     case ARC4::fixup_arc4_b26: {
-      uint32_t CurVal = support::endian::read32le(&Data[Offset]);
+      uint32_t CurVal = support::endian::read32le(Data);
       uint32_t Encoded = (Value >> 2) & 0x00ffffff;
-      support::endian::write<uint32_t>(&Data[Offset],
+      support::endian::write<uint32_t>(Data,
                                         (CurVal & 0xff000000) | Encoded,
                                         llvm::endianness::little);
       return;
     }
     case ARC4::fixup_arc4_b22_pcrel: {
-      uint32_t CurVal = support::endian::read32le(&Data[Offset]);
+      uint32_t CurVal = support::endian::read32le(Data);
       uint32_t Encoded = ((Value >> 2) << 7) & 0x1fffff80;
-      support::endian::write<uint32_t>(&Data[Offset],
+      support::endian::write<uint32_t>(Data,
                                         (CurVal & ~0x1fffff80u) | Encoded,
                                         llvm::endianness::little);
       return;
