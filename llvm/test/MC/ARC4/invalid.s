@@ -45,3 +45,19 @@ st r0, [1000]
 ; --- Store reg+reg form (stores only support shimm/limm offset, not reg+reg) ---
 ; CHECK: error: invalid operand for instruction
 st r0, [r1, r2]
+
+; --- Condition code with shimm operand (bits overlap) ---
+; CHECK: error: condition code not allowed with short immediate operand
+add.eq r0, r1, 5
+
+; --- Condition code with shimm on SOP ---
+; CHECK: error: condition code not allowed with short immediate operand
+asr.eq r1, 5
+
+; --- Delay slot on non-branch instruction ---
+; CHECK: error: delay slot modifier not allowed on this instruction
+add.d r0, r1, r2
+
+; --- Delay slot on non-branch SOP ---
+; CHECK: error: delay slot modifier not allowed on this instruction
+asr.d r1, r2

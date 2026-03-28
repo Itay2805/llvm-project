@@ -14,12 +14,12 @@ st r0, [r1]
 ; CHECK: st	r0, [r1, 4]             ; encoding: [0x04,0x80,0x00,0x10]
 st r0, [r1, 4]
 
-; reg, [shimm, shimm] (both must match -- uses limm encoding)
-; CHECK: st	r0, [5, 5]              ; encoding: [0x05,0x00,0x1f,0x10,0x05,0x00,0x00,0x00]
+; reg, [shimm, shimm] (both must match -- uses shimm encoding, 4 bytes)
+; CHECK: st	r0, [5]                 ; encoding: [0x05,0x80,0x1f,0x10]
 st r0, [5, 5]
 
-; shimm, [reg, shimm] (source is shimm -- uses limm for source)
-; CHECK: st	5, [r1, 5]              ; encoding: [0x05,0xfc,0x00,0x10,0x05,0x00,0x00,0x00]
+; shimm, [reg, shimm] (source is shimm -- uses shimm encoding, 4 bytes)
+; CHECK: st	5, [r1, 5]              ; encoding: [0x05,0xfe,0x00,0x10]
 st 5, [r1, 5]
 
 ; limm, [reg, shimm] (source is limm)

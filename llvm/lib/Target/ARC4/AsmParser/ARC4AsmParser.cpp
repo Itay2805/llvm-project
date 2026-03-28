@@ -354,7 +354,7 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     return Error(getLexer().getLoc(), "unexpected token in operand list");
   getParser().Lex();
 
-  // Fix 5 (rss form): If we have pattern <mnemonic> <reg> <imm> <imm> where
+  // Fix (rss form): If we have pattern <mnemonic> <reg> <imm> <imm> where
   // both immediates are equal and fit in 9 bits, collapse to <mnemonic> <reg>
   // <imm> so the matcher finds the rss variant.
   //
@@ -398,6 +398,72 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     }
   }
 
+  // Fix (discard form): Convert immediate 0 in the destination position to a
+  // Token "0" so the AsmMatcher can match against discard instruction variants
+  // (e.g. ADD_0rr) that have literal "0" in their AsmString.
+  // Only apply to ALU3 and SOP mnemonics that have discard variants.
+  // Layout: [0]=mnemonic, [1]=imm(0), ...
+  {
+    bool HasDiscardForm =
+        StringSwitch<bool>(MnemonicBuf)
+            .Case("add", true).Case("adc", true)
+            .Case("sub", true).Case("sbc", true)
+            .Case("and", true).Case("or", true)
+            .Case("bic", true).Case("xor", true)
+            .Case("asl", true).Case("asr", true)
+            .Case("lsr", true).Case("ror", true)
+            .Case("rrc", true).Case("sexb", true)
+            .Case("sexw", true).Case("extb", true)
+            .Case("extw", true)
+            .Default(false);
+    if (HasDiscardForm && Operands.size() >= 2) {
+      auto *Op1 = static_cast<ARC4Operand *>(Operands[1].get());
+      if (Op1->isImm()) {
+        if (const auto *CE = dyn_cast<MCConstantExpr>(Op1->Expr)) {
+          if (CE->getValue() == 0) {
+            SMLoc S = Op1->getStartLoc();
+            Operands[1] = ARC4Operand::createToken("0", S);
+          }
+        }
+      }
+    }
+  }
+
+  // Fix (store shimm forms): Collapse duplicate shimm operands in store
+  // instructions so the AsmMatcher can find the shimm variants.
+  //
+  // The store shimm forms (srs, rss, sss) have tied operands in their
+  // AsmString (e.g., "st $offset, [$b, $offset]") which the AsmMatcher
+  // can't parse. We collapse duplicate bracket immediates here; the srs
+  // and sss forms are handled in matchAndEmitInstruction via manual MCInst
+  // construction after the initial match selects a limm variant.
+  //
+  // Inner bracket collapse: st ?, [imm, imm] where imms are equal and
+  // shimm-sized -> st ?, [imm].  Matches ST_rss via existing AsmMatcher entry.
+  StringRef MnBase = static_cast<ARC4Operand *>(Operands[0].get())->getToken();
+  bool IsStore = (MnBase == "st" || MnBase == "stb" || MnBase == "stw");
+
+  if (IsStore && Operands.size() == 6) {
+    auto *O2 = static_cast<ARC4Operand *>(Operands[2].get());
+    auto *O3 = static_cast<ARC4Operand *>(Operands[3].get());
+    auto *O4 = static_cast<ARC4Operand *>(Operands[4].get());
+    auto *O5 = static_cast<ARC4Operand *>(Operands[5].get());
+    // Check: ?, [, imm, imm, ]
+    if (O2->isToken() && O2->getToken() == "[" &&
+        O3->isImm() && O4->isImm() &&
+        O5->isToken() && O5->getToken() == "]") {
+      const auto *CE3 = dyn_cast<MCConstantExpr>(O3->Expr);
+      const auto *CE4 = dyn_cast<MCConstantExpr>(O4->Expr);
+      if (CE3 && CE4 && CE3->getValue() == CE4->getValue()) {
+        int64_t Val = CE3->getValue();
+        if (Val >= -256 && Val <= 255) {
+          // Remove the second bracket imm (index 4), shifting ] down.
+          Operands.erase(Operands.begin() + 4);
+        }
+      }
+    }
+  }
+
   // Append trailing annotation operands for the MCCodeEmitter.
   // Convention: condition code, flag bit, delay slot — in that order.
   // Only append if any are non-default, to avoid bloating simple instructions.
@@ -413,6 +479,156 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     // Marker: delay slot
     Operands.push_back(ARC4Operand::createImm(
         MCConstantExpr::create(DelaySlot, getContext()), NameLoc, NameLoc));
+  }
+
+  return false;
+}
+
+/// Returns true if the opcode is a branch or jump instruction
+/// (opcodes 4-7: b, bl, lp, j/jl) where delay slot modifiers are valid.
+static bool isBranchOrJump(unsigned Opc) {
+  switch (Opc) {
+  case ARC4::B:
+  case ARC4::Bcc:
+  case ARC4::BL:
+  case ARC4::BLcc:
+  case ARC4::LP_insn:
+  case ARC4::LP_cc:
+  case ARC4::J_r:
+  case ARC4::J_l:
+  case ARC4::JL_r:
+  case ARC4::JL_l:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Returns true if the instruction is a shimm form (uses 9-bit short immediate
+/// in bits [8:0], which overlaps with the condition code field [4:0]).
+/// Condition codes are NOT compatible with shimm forms.
+static bool isShimmForm(unsigned Opc) {
+  switch (Opc) {
+  // ALU3 shimm variants
+  case ARC4::ADD_rrs: case ARC4::ADD_rsr: case ARC4::ADD_rss:
+  case ARC4::ADD_0rs: case ARC4::ADD_0sr: case ARC4::ADD_0ss:
+  case ARC4::ADC_rrs: case ARC4::ADC_rsr: case ARC4::ADC_rss:
+  case ARC4::ADC_0rs: case ARC4::ADC_0sr: case ARC4::ADC_0ss:
+  case ARC4::SUB_rrs: case ARC4::SUB_rsr: case ARC4::SUB_rss:
+  case ARC4::SUB_0rs: case ARC4::SUB_0sr: case ARC4::SUB_0ss:
+  case ARC4::SBC_rrs: case ARC4::SBC_rsr: case ARC4::SBC_rss:
+  case ARC4::SBC_0rs: case ARC4::SBC_0sr: case ARC4::SBC_0ss:
+  case ARC4::AND_rrs: case ARC4::AND_rsr: case ARC4::AND_rss:
+  case ARC4::AND_0rs: case ARC4::AND_0sr: case ARC4::AND_0ss:
+  case ARC4::OR_rrs:  case ARC4::OR_rsr:  case ARC4::OR_rss:
+  case ARC4::OR_0rs:  case ARC4::OR_0sr:  case ARC4::OR_0ss:
+  case ARC4::BIC_rrs: case ARC4::BIC_rsr: case ARC4::BIC_rss:
+  case ARC4::BIC_0rs: case ARC4::BIC_0sr: case ARC4::BIC_0ss:
+  case ARC4::XOR_rrs: case ARC4::XOR_rsr: case ARC4::XOR_rss:
+  case ARC4::XOR_0rs: case ARC4::XOR_0sr: case ARC4::XOR_0ss:
+  // SOP shimm variants
+  case ARC4::ASL_rs:  case ARC4::ASL_0s:
+  case ARC4::ASR_rs:  case ARC4::ASR_0s:
+  case ARC4::LSR_rs:  case ARC4::LSR_0s:
+  case ARC4::ROR_rs:  case ARC4::ROR_0s:
+  case ARC4::RRC_rs:  case ARC4::RRC_0s:
+  case ARC4::SEXB_rs: case ARC4::SEXB_0s:
+  case ARC4::SEXW_rs: case ARC4::SEXW_0s:
+  case ARC4::EXTB_rs: case ARC4::EXTB_0s:
+  case ARC4::EXTW_rs: case ARC4::EXTW_0s:
+  // Flag shimm
+  case ARC4::FLAG_s:
+  // Store forms (all stores use shimm offset in bits[8:0])
+  case ARC4::ST_rrs:  case ARC4::ST_srs:  case ARC4::ST_rss:
+  case ARC4::ST_sss:  case ARC4::ST_rls:  case ARC4::ST_lrs:
+  case ARC4::ST_lls:
+  case ARC4::STB_rrs: case ARC4::STB_srs: case ARC4::STB_rss:
+  case ARC4::STB_sss: case ARC4::STB_rls: case ARC4::STB_lrs:
+  case ARC4::STB_lls:
+  case ARC4::STW_rrs: case ARC4::STW_srs: case ARC4::STW_rss:
+  case ARC4::STW_sss: case ARC4::STW_rls: case ARC4::STW_lrs:
+  case ARC4::STW_lls:
+  // Load shimm forms (opcode 1)
+  case ARC4::LD_rs:   case ARC4::LD_ss:
+  case ARC4::LDB_rs:  case ARC4::LDB_ss:
+  case ARC4::LDW_rs:  case ARC4::LDW_ss:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Try to match a store instruction to a shimm form (srs or sss) when the
+/// AsmMatcher selected a limm form or failed to match.  Returns true if a
+/// shimm form was successfully emitted.
+///
+/// Store shimm forms have tied operands in their AsmString which the
+/// AsmMatcher cannot handle.  We detect the patterns here and manually
+/// build the MCInst.
+///
+/// Pattern srs: "st val, [base, offset]" where val == offset, both shimm.
+///   Operands (before annotation strip): [mnem, imm, [, reg, imm, ]]
+///
+/// Pattern sss: "st val, [base, offset]" where val == base == offset, all shimm.
+///   After inner-bracket collapse in parser: [mnem, imm, [, imm, ]]
+///   Original form: [mnem, imm, [, imm, imm, ]]  (all three equal)
+static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
+                             MCInst &Inst) {
+  // Map mnemonic to srs/sss opcode pairs and size.
+  unsigned SRSOpc = 0, SSSOpc = 0;
+  if (Mnemonic == "st")       { SRSOpc = ARC4::ST_srs;  SSSOpc = ARC4::ST_sss;  }
+  else if (Mnemonic == "stb") { SRSOpc = ARC4::STB_srs; SSSOpc = ARC4::STB_sss; }
+  else if (Mnemonic == "stw") { SRSOpc = ARC4::STW_srs; SSSOpc = ARC4::STW_sss; }
+  else return false;
+
+  // Pattern srs: [mnem, imm_val, [, reg_base, imm_offset, ]]  (6 operands)
+  if (Operands.size() == 6) {
+    auto *O1 = static_cast<ARC4Operand *>(Operands[1].get());
+    auto *O2 = static_cast<ARC4Operand *>(Operands[2].get());
+    auto *O3 = static_cast<ARC4Operand *>(Operands[3].get());
+    auto *O4 = static_cast<ARC4Operand *>(Operands[4].get());
+    auto *O5 = static_cast<ARC4Operand *>(Operands[5].get());
+    if (O1->isImm() && O2->isToken() && O2->getToken() == "[" &&
+        O3->isReg() && O4->isImm() &&
+        O5->isToken() && O5->getToken() == "]") {
+      const auto *CEVal = dyn_cast<MCConstantExpr>(O1->Expr);
+      const auto *CEOff = dyn_cast<MCConstantExpr>(O4->Expr);
+      if (CEVal && CEOff && CEVal->getValue() == CEOff->getValue()) {
+        int64_t Val = CEVal->getValue();
+        if (Val >= -256 && Val <= 255) {
+          // Build ST_srs: (ins simm9:$offset, GPR32:$b)
+          Inst.clear();
+          Inst.setOpcode(SRSOpc);
+          Inst.addOperand(MCOperand::createImm(Val));    // offset (= val)
+          Inst.addOperand(MCOperand::createReg(O3->getReg())); // base
+          return true;
+        }
+      }
+    }
+  }
+
+  // Pattern sss (after inner bracket collapse): [mnem, imm_val, [, imm_base, ]]
+  // (5 operands) where val == base, both shimm.
+  if (Operands.size() == 5) {
+    auto *O1 = static_cast<ARC4Operand *>(Operands[1].get());
+    auto *O2 = static_cast<ARC4Operand *>(Operands[2].get());
+    auto *O3 = static_cast<ARC4Operand *>(Operands[3].get());
+    auto *O4 = static_cast<ARC4Operand *>(Operands[4].get());
+    if (O1->isImm() && O2->isToken() && O2->getToken() == "[" &&
+        O3->isImm() && O4->isToken() && O4->getToken() == "]") {
+      const auto *CEVal = dyn_cast<MCConstantExpr>(O1->Expr);
+      const auto *CEBase = dyn_cast<MCConstantExpr>(O3->Expr);
+      if (CEVal && CEBase && CEVal->getValue() == CEBase->getValue()) {
+        int64_t Val = CEVal->getValue();
+        if (Val >= -256 && Val <= 255) {
+          // Build ST_sss: (ins st_offset9:$offset)
+          Inst.clear();
+          Inst.setOpcode(SSSOpc);
+          Inst.addOperand(MCOperand::createImm(Val));    // offset (= val = base)
+          return true;
+        }
+      }
+    }
   }
 
   return false;
@@ -456,12 +672,17 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   }
 
   MCInst Inst;
-  switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm)) {
-  case Match_Success:
+
+  // Try to match store shimm forms (srs, sss) before the normal matcher.
+  // These forms have tied operands in their AsmString that the AsmMatcher
+  // cannot handle, so we detect and build them manually.
+  StringRef Mnemonic =
+      static_cast<ARC4Operand *>(Operands[0].get())->getToken();
+  bool StoreShimmMatched = tryMatchStoreSRS(Mnemonic, Operands, Inst);
+
+  if (StoreShimmMatched) {
     // Re-attach annotation operands to the MCInst for the encoder.
     if (HasAnnotations) {
-      // Annotations were stored in reverse order: [delay, flag, cc].
-      // We want cc, flag, delay in the MCInst.
       auto *CC = static_cast<ARC4Operand *>(Annotations[2].get());
       auto *Flag = static_cast<ARC4Operand *>(Annotations[1].get());
       auto *Delay = static_cast<ARC4Operand *>(Annotations[0].get());
@@ -471,6 +692,45 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     }
     Out.emitInstruction(Inst, getSTI());
     return false;
+  }
+
+  switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm)) {
+  case Match_Success: {
+    // Re-attach annotation operands to the MCInst for the encoder.
+    if (HasAnnotations) {
+      // Annotations were stored in reverse order: [delay, flag, cc].
+      // We want cc, flag, delay in the MCInst.
+      auto *CC = static_cast<ARC4Operand *>(Annotations[2].get());
+      auto *Flag = static_cast<ARC4Operand *>(Annotations[1].get());
+      auto *Delay = static_cast<ARC4Operand *>(Annotations[0].get());
+
+      // Extract annotation values for validation.
+      int CCVal = 0, DelayVal = 0;
+      if (const auto *CE = dyn_cast<MCConstantExpr>(CC->Expr))
+        CCVal = CE->getValue();
+      if (const auto *CE = dyn_cast<MCConstantExpr>(Delay->Expr))
+        DelayVal = CE->getValue();
+
+      // Bug 3 fix: condition codes are invalid with shimm forms because
+      // the shimm value occupies bits [8:0] which overlap with the condition
+      // code field [4:0]. Emit an error if a condition code was specified.
+      if (CCVal != 0 && isShimmForm(Inst.getOpcode()))
+        return Error(IDLoc,
+                     "condition code not allowed with short immediate operand");
+
+      // Bug 4 fix: delay slot modifier (.d/.jd) is only valid on branch
+      // and jump instructions (opcodes 4-7). Emit an error otherwise.
+      if (DelayVal != 0 && !isBranchOrJump(Inst.getOpcode()))
+        return Error(IDLoc,
+                     "delay slot modifier not allowed on this instruction");
+
+      CC->addImmOperands(Inst, 1);
+      Flag->addImmOperands(Inst, 1);
+      Delay->addImmOperands(Inst, 1);
+    }
+    Out.emitInstruction(Inst, getSTI());
+    return false;
+  }
   case Match_MissingFeature:
     return Error(IDLoc,
                  "instruction requires a CPU feature not currently enabled");

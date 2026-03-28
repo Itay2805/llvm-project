@@ -536,3 +536,16 @@ def : InstAlias<"and\t$a, $shimm", (AND_rss GPR32:$a, simm9:$shimm), 0>;
 def : InstAlias<"or\t$a, $shimm",  (OR_rss  GPR32:$a, simm9:$shimm), 0>;
 def : InstAlias<"bic\t$a, $shimm", (BIC_rss GPR32:$a, simm9:$shimm), 0>;
 def : InstAlias<"xor\t$a, $shimm", (XOR_rss GPR32:$a, simm9:$shimm), 0>;
+
+// Hidden 0ss aliases: discard + shimm+shimm form (after parser collapses
+// duplicate imms AND converts leading 0 to a token).
+// "add 0, 5, 5" -> parser collapses to [add, 0(token), 5(imm)] -> 0ss.
+def : InstAlias<"add\t0, $shimm", (ADD_0ss simm9:$shimm), 0>;
+def : InstAlias<"adc\t0, $shimm", (ADC_0ss simm9:$shimm), 0>;
+def : InstAlias<"sub\t0, $shimm", (SUB_0ss simm9:$shimm), 0>;
+def : InstAlias<"sbc\t0, $shimm", (SBC_0ss simm9:$shimm), 0>;
+def : InstAlias<"and\t0, $shimm", (AND_0ss simm9:$shimm), 0>;
+def : InstAlias<"or\t0, $shimm",  (OR_0ss  simm9:$shimm), 0>;
+def : InstAlias<"bic\t0, $shimm", (BIC_0ss simm9:$shimm), 0>;
+def : InstAlias<"xor\t0, $shimm", (XOR_0ss simm9:$shimm), 0>;
+
