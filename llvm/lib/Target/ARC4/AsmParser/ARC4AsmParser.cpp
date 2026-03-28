@@ -516,7 +516,6 @@ static bool isShimmForm(unsigned Opc) {
   case ARC4::XOR_rrs: case ARC4::XOR_rsr: case ARC4::XOR_rss:
   case ARC4::XOR_0rs: case ARC4::XOR_0sr: case ARC4::XOR_0ss:
   // SOP shimm variants
-  case ARC4::ASL_rs:  case ARC4::ASL_0s:
   case ARC4::ASR_rs:  case ARC4::ASR_0s:
   case ARC4::LSR_rs:  case ARC4::LSR_0s:
   case ARC4::ROR_rs:  case ARC4::ROR_0s:

@@ -219,7 +219,8 @@ multiclass SOP<bits<6> subop, string mnemonic> {
   }
 }
 
-defm ASL  : SOP<0b000000, "asl">;
+// Note: ASL does NOT exist as a single-operand instruction (subop 0 is
+// reserved for the flag instruction). ASL is an alias for add a, b, b.
 defm ASR  : SOP<0b000001, "asr">;
 defm LSR  : SOP<0b000010, "lsr">;
 defm ROR  : SOP<0b000011, "ror">;
@@ -474,8 +475,15 @@ def : InstAlias<"mov\t$a, $b", (AND_rrr GPR32:$a, GPR32:$b, GPR32:$b, 0, 0)>;
 // mov a, shimm => and a, shimm, shimm  (rss form: both B and C are shimm sentinel)
 def : InstAlias<"mov\t$a, $shimm", (AND_rss GPR32:$a, simm9:$shimm, 0)>;
 
-// asl as add alias (asl a, b => add a, b, b)
+// asl/lsl as add alias — ASL does not exist as a single-operand instruction
+// (opcode 3 subop 0 is the flag instruction). Instead:
+//   asl a, b    => add a, b, b  (shift left by 1 = double)
+//   asl a, b, c => add a, b, c  (3-operand form)
+def : InstAlias<"asl\t$a, $b", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$b, 0, 0)>;
+def : InstAlias<"asl\t$a, $imm", (ADD_rss GPR32:$a, simm9:$imm, 0)>;
 def : InstAlias<"asl\t$a, $b, $c", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$c, 0, 0)>;
+def : InstAlias<"lsl\t$a, $b", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$b, 0, 0)>;
+def : InstAlias<"lsl\t$a, $imm", (ADD_rss GPR32:$a, simm9:$imm, 0)>;
 def : InstAlias<"lsl\t$a, $b, $c", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$c, 0, 0)>;
 
 // rlc a, b => adc a, b, b  (rotate left through carry)

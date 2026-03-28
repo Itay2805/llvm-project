@@ -38,6 +38,6 @@ extb r1, r2
 ; CHECK: extw	r1, r2                  ; encoding: [0x00,0x10,0x21,0x18]
 extw r1, r2
 
-; --- asl: arithmetic/logical shift left (SOP form) ---
-; CHECK: asl	r1, r2                  ; encoding: [0x00,0x00,0x21,0x18]
+; --- asl: arithmetic/logical shift left (alias for add a, b, b) ---
+; CHECK: add	r1, r2, r2              ; encoding: [0x00,0x04,0x21,0x40]
 asl r1, r2

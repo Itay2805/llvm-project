@@ -2,12 +2,17 @@
 
 ; Tests for ALL single-operand instructions across rr, rs (shimm), rl (limm)
 ; forms, plus .f and .q variants.
+;
+; Note: ASL does not exist as a single-operand instruction (opcode 3 subop 0
+; is the flag instruction). ASL is an alias for add a, b, b. Tests for ASL
+; are included separately to verify alias behavior.
 
 ; ============================================================
 ; rr form: reg, reg
 ; ============================================================
 
-; CHECK: asl	r1, r2                  ; encoding: [0x00,0x00,0x21,0x18]
+; ASL is an alias for add — separate from the SOP family
+; CHECK: add	r1, r2, r2              ; encoding: [0x00,0x04,0x21,0x40]
 asl r1, r2
 ; CHECK: asr	r1, r2                  ; encoding: [0x00,0x02,0x21,0x18]
 asr r1, r2
@@ -30,7 +35,8 @@ extw r1, r2
 ; rs form: reg, shimm
 ; ============================================================
 
-; CHECK: asl	r1, 5                   ; encoding: [0x05,0x80,0x3f,0x18]
+; ASL shimm: alias for add rss (both shimms match)
+; CHECK: add	r1, 5, 5                ; encoding: [0x05,0xfe,0x3f,0x40]
 asl r1, 5
 ; CHECK: asr	r1, 5                   ; encoding: [0x05,0x82,0x3f,0x18]
 asr r1, 5
@@ -53,8 +59,7 @@ extw r1, 5
 ; rl form: reg, limm
 ; ============================================================
 
-; CHECK: asl	r1, 1000                ; encoding: [0x00,0x00,0x3f,0x18,0xe8,0x03,0x00,0x00]
-asl r1, 1000
+; ASL with limm is not supported (would need add rll = both limm, not valid)
 ; CHECK: asr	r1, 1000                ; encoding: [0x00,0x02,0x3f,0x18,0xe8,0x03,0x00,0x00]
 asr r1, 1000
 ; CHECK: lsr	r1, 1000                ; encoding: [0x00,0x04,0x3f,0x18,0xe8,0x03,0x00,0x00]
@@ -66,7 +71,8 @@ sexb r1, 1000
 ; .f flag on SOP rr form
 ; ============================================================
 
-; CHECK: asl	r1, r2                  ; encoding: [0x00,0x01,0x21,0x18]
+; ASL .f: alias for add.f a, b, b
+; CHECK: add	r1, r2, r2              ; encoding: [0x00,0x05,0x21,0x40]
 asl.f r1, r2
 ; CHECK: asr	r1, r2                  ; encoding: [0x00,0x03,0x21,0x18]
 asr.f r1, r2
@@ -102,7 +108,8 @@ rrc.f r1, 5
 asr.eq r1, r2
 ; CHECK: lsr	r1, r2                  ; encoding: [0x02,0x04,0x21,0x18]
 lsr.ne r1, r2
-; CHECK: asl	r1, r2                  ; encoding: [0x09,0x00,0x21,0x18]
+; ASL .gt: alias for add.gt a, b, b
+; CHECK: add	r1, r2, r2              ; encoding: [0x09,0x04,0x21,0x40]
 asl.gt r1, r2
 ; CHECK: sexb	r1, r2                  ; encoding: [0x01,0x0a,0x21,0x18]
 sexb.eq r1, r2
