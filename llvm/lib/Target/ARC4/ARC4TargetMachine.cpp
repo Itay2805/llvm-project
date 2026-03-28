@@ -28,7 +28,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeARC4Target() {
 
 static const char *ARC4DataLayout =
     "e-m:e-p:32:32-i1:8:32-i8:8:32-i16:16:32-i32:32:32"
-    "-f32:32:32-a:0:32-n32";
+    "-f32:32:32-f64:32:32-a:0:32-n32";
 
 ARC4TargetMachine::ARC4TargetMachine(const Target &T, const Triple &TT,
                                      StringRef CPU, StringRef FS,
