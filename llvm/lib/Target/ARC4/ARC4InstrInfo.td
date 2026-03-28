@@ -486,8 +486,20 @@ def : InstAlias<"lsl\t$a, $b", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$b, 0, 0)>;
 def : InstAlias<"lsl\t$a, $imm", (ADD_rss GPR32:$a, simm9:$imm, 0)>;
 def : InstAlias<"lsl\t$a, $b, $c", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$c, 0, 0)>;
 
-// rlc a, b => adc a, b, b  (rotate left through carry)
-def : InstAlias<"rlc\t$a, $b", (ADC_rrr GPR32:$a, GPR32:$b, GPR32:$b, 0, 0)>;
+// rlc a, b => adc.f a, b, b  (rotate left through carry, sets flags)
+def : InstAlias<"rlc\t$a, $b", (ADC_rrr GPR32:$a, GPR32:$b, GPR32:$b, 1, 0)>;
+
+// cmp a, b => sub.f 0, a, b  (compare: subtract and set flags, discard result)
+def : InstAlias<"cmp\t$a, $b", (SUB_0rr GPR32:$a, GPR32:$b, 1, 0)>;
+// cmp a, shimm => sub.f 0, a, shimm
+def : InstAlias<"cmp\t$a, $shimm", (SUB_0rs GPR32:$a, simm9:$shimm, 1)>;
+// cmp a, limm => sub.f 0, a, limm
+def : InstAlias<"cmp\t$a, $limm", (SUB_0rl GPR32:$a, limm32:$limm, 1, 0)>;
+
+// Note: ROL (rotate left) is a two-instruction sequence:
+//   add.f a, b, b  ; shift left, carry gets MSB
+//   adc a, a, 0    ; add carry into LSB
+// It cannot be represented as a single InstAlias.
 
 // j [reg] / jl [reg] — bracket syntax for jump through register
 def : InstAlias<"j\t[$b]", (J_r GPR32:$b, 0, 0, 0)>;

@@ -661,26 +661,27 @@ static void setSuffixOperands(MCInst &Inst, const MCInstrInfo &MCII,
 
   switch (Opc) {
   // Jump instructions: last 3 operands are f, q, n
+  // Only overwrite if user explicitly specified the suffix.
   case ARC4::J_r: case ARC4::J_l:
   case ARC4::JL_r: case ARC4::JL_l:
     if (N >= 3) {
-      Inst.getOperand(N - 3).setImm(FlagBit);
-      Inst.getOperand(N - 2).setImm(CondCode);
-      Inst.getOperand(N - 1).setImm(DelaySlot);
+      if (FlagBit != 0) Inst.getOperand(N - 3).setImm(FlagBit);
+      if (CondCode != 0) Inst.getOperand(N - 2).setImm(CondCode);
+      if (DelaySlot != 0) Inst.getOperand(N - 1).setImm(DelaySlot);
     }
     return;
 
   // Branch instructions: last 2 operands are q, n
   case ARC4::B: case ARC4::BL: case ARC4::LP_insn:
     if (N >= 2) {
-      Inst.getOperand(N - 2).setImm(CondCode);
-      Inst.getOperand(N - 1).setImm(DelaySlot);
+      if (CondCode != 0) Inst.getOperand(N - 2).setImm(CondCode);
+      if (DelaySlot != 0) Inst.getOperand(N - 1).setImm(DelaySlot);
     }
     return;
 
   // Flag_r/Flag_l: last operand is q
   case ARC4::FLAG_r: case ARC4::FLAG_l:
-    if (N >= 1)
+    if (N >= 1 && CondCode != 0)
       Inst.getOperand(N - 1).setImm(CondCode);
     return;
 
@@ -720,14 +721,19 @@ static void setSuffixOperands(MCInst &Inst, const MCInstrInfo &MCII,
   }
 
   // ALU/SOP instructions: check if shimm or non-shimm form.
+  // Only overwrite suffix operands if the user explicitly specified the suffix.
+  // Aliases (e.g., rlc => adc.f, cmp => sub.f 0) may have pre-set suffix
+  // values that should not be overwritten with defaults.
   if (isShimmForm(Opc)) {
     // Shimm ALU/SOP forms: last operand is f (no q, bits overlap with shimm)
-    if (N >= 1)
+    if (N >= 1 && FlagBit != 0)
       Inst.getOperand(N - 1).setImm(FlagBit);
   } else if (N >= 2) {
     // Non-shimm ALU/SOP form: last 2 operands are f, q
-    Inst.getOperand(N - 2).setImm(FlagBit);
-    Inst.getOperand(N - 1).setImm(CondCode);
+    if (FlagBit != 0)
+      Inst.getOperand(N - 2).setImm(FlagBit);
+    if (CondCode != 0)
+      Inst.getOperand(N - 1).setImm(CondCode);
   }
 }
 

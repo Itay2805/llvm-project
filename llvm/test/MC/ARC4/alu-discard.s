@@ -31,7 +31,8 @@ sbc 0, r1, r2
 
 ; CHECK: add	0, r1, r2               ; encoding: [0x00,0x85,0xa0,0x47]
 add.f 0, r1, r2
-; CHECK: sub	0, r3, r4               ; encoding: [0x00,0x89,0xa1,0x57]
+; sub.f 0, r3, r4 prints as "cmp r3, r4" because the cmp alias matches
+; CHECK: cmp	r3, r4                  ; encoding: [0x00,0x89,0xa1,0x57]
 sub.f 0, r3, r4
 
 ; ============================================================
