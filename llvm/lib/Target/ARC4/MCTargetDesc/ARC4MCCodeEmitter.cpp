@@ -252,10 +252,10 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
   support::endian::write<uint32_t>(CB, static_cast<uint32_t>(Value),
                                    llvm::endianness::little);
 
-  // For 8-byte instructions (limm), emit the extra 32-bit limm word.
+  // For instructions with LIMM (HasLimm TSFlag), emit the extra 32-bit word.
   // The limm operand is always the first non-register operand in the MCInst
   // (suffix operands f/q/n come after the limm in operand order).
-  if (Desc.getSize() == 8) {
+  if (Desc.TSFlags & 0x1) {
     bool Emitted = false;
     for (unsigned I = 0, E = Inst.getNumOperands(); I < E; ++I) {
       const MCOperand &MO = Inst.getOperand(I);

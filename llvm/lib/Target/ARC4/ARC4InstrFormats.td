@@ -44,6 +44,14 @@ class ARC4Inst<dag outs, dag ins, string asmstr, list<dag> pattern>
   let Namespace = "ARC4";
   let Size = 4;
 
+  // TSFlags bit 0: HasLimm — instruction has a 32-bit LIMM extra word.
+  // Used by MCCodeEmitter to emit the second word. The TableGen Inst
+  // field is always 32 bits (the first word only); Size is always 4
+  // so the decoder generates a single 32-bit table. The disassembler
+  // and code emitter check HasLimm to handle the second word.
+  bits<1> HasLimm = 0;
+  let TSFlags{0} = HasLimm;
+
   field bits<32> Inst;
   field bits<32> SoftFail = 0;
 
@@ -55,10 +63,11 @@ class ARC4Inst<dag outs, dag ins, string asmstr, list<dag> pattern>
 
 // Base for 8-byte instructions (those with limm extra word).
 // The limm word is handled by MCCodeEmitter; TableGen only encodes
-// the first 32-bit word. We set Size = 8 so the disassembler knows.
+// the first 32-bit word. HasLimm = 1 tells the emitter/disassembler
+// that a second 32-bit word follows.
 class ARC4Inst8<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
-  let Size = 8;
+  let HasLimm = 1;
 }
 
 //===----------------------------------------------------------------------===//

@@ -80,6 +80,7 @@ def ld_offset9 : Operand<i32> {
 
 // Shimm+shimm load address: printed as effective address (2*shimm).
 def ld_ss_addr : Operand<i32> {
+  let DecoderMethod = "decodeLdSsAddr";
   let PrintMethod = "printLdSsAddr";
   let ParserMatchClass = Simm9AsmOperand;
 }
