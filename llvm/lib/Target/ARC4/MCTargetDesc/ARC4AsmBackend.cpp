@@ -30,7 +30,9 @@ public:
   MCFixupKindInfo getFixupKindInfo(MCFixupKind Kind) const override {
     const static MCFixupKindInfo Infos[ARC4::NumTargetFixupKinds] = {
         {"fixup_arc4_b26", 0, 24, 0},
-        {"fixup_arc4_b22_pcrel", 7, 22, 0},
+        // B22_PCREL: 20-bit offset at bit position 7 (bits [26:7]).
+        // "22-bit" refers to address range (20 encoding bits × 4 = 22-bit range).
+        {"fixup_arc4_b22_pcrel", 7, 20, 0},
     };
     if (Kind < FirstTargetFixupKind)
       return MCAsmBackend::getFixupKindInfo(Kind);
@@ -72,10 +74,14 @@ public:
       return;
     }
     case ARC4::fixup_arc4_b22_pcrel: {
+      // 20-bit offset in bits [26:7], word-aligned.
+      // ARC4 branch offset is relative to delay slot (PC+4), not the branch
+      // instruction itself. Subtract 4 to adjust.
       uint32_t CurVal = support::endian::read32le(Data);
-      uint32_t Encoded = ((Value >> 2) << 7) & 0x1fffff80;
+      int64_t Adjusted = static_cast<int64_t>(Value) - 4;
+      uint32_t Encoded = ((static_cast<uint32_t>(Adjusted) >> 2) << 7) & 0x07ffff80;
       support::endian::write<uint32_t>(Data,
-                                        (CurVal & ~0x1fffff80u) | Encoded,
+                                        (CurVal & ~0x07ffff80u) | Encoded,
                                         llvm::endianness::little);
       return;
     }

@@ -33,7 +33,7 @@ enum {
   R_ARC_NONE     = 0,
   R_ARC_32       = 4, // 32-bit absolute
   R_ARC_B26      = 5, // 26-bit absolute branch: val>>2 stored in bits [23:0]
-  R_ARC_B22_PCREL = 6, // 22-bit PC-relative branch: val>>2 stored in bits [28:7]
+  R_ARC_B22_PCREL = 6, // 20-bit PC-relative branch offset in bits [26:7]
 };
 
 class ARC4 final : public TargetInfo {
@@ -92,15 +92,16 @@ void ARC4::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   }
 
   case R_ARC_B22_PCREL: {
-    // 22-bit PC-relative branch.  The branch offset is val>>2, stored in
-    // instruction bits [28:7].
-    int64_t sval = static_cast<int64_t>(val);
-    checkAlignment(ctx, loc, val, 4, rel);
+    // 20-bit PC-relative branch offset in bits [26:7].
+    // ARC4 branch offset is relative to delay slot (PC+4), not the branch
+    // instruction itself. Subtract 4 to adjust.
+    int64_t sval = static_cast<int64_t>(val) - 4;
+    checkAlignment(ctx, loc, sval, 4, rel);
     int64_t offset = sval >> 2;
-    checkInt(ctx, loc, offset, 22, rel);
+    checkInt(ctx, loc, offset, 20, rel);
     uint32_t insn = read32le(loc);
-    insn = (insn & ~0x1FFFFF80U) |
-           ((static_cast<uint32_t>(offset) & 0x003FFFFFU) << 7);
+    insn = (insn & ~0x07FFFF80U) |
+           ((static_cast<uint32_t>(offset) & 0x000FFFFFU) << 7);
     write32le(loc, insn);
     break;
   }
