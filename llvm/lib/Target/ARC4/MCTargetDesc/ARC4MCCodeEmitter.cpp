@@ -82,13 +82,62 @@ unsigned ARC4MCCodeEmitter::getBranchTargetOpValue(
 
 /// Check whether the instruction has a shimm operand by looking for sentinel
 /// values 63 (SHIMM) or 61 (SHIMM_UPDATE) in the B or C register fields.
-/// Returns true if shimm is present, and sets BFieldIsShimm / CFieldIsShimm.
 static void detectShimmFields(uint32_t Value, bool &BFieldIsShimm,
                               bool &CFieldIsShimm) {
   unsigned B = (Value >> 15) & 0x3F;
   unsigned C = (Value >> 9) & 0x3F;
   BFieldIsShimm = (B == 63 || B == 61);
   CFieldIsShimm = (C == 63 || C == 61);
+}
+
+/// Find the flag (f) operand value for shimm sentinel flipping.
+/// Returns the f operand value, or 0 if no f operand exists.
+/// The f operand is the last operand for shimm forms (rrs/rsr/rss, SOP rs),
+/// since shimm forms have: visible operands..., f.
+static int getShimmFlagValue(const MCInst &Inst, const MCInstrDesc &Desc) {
+  unsigned Opc = Inst.getOpcode();
+  unsigned NumOps = Inst.getNumOperands();
+  unsigned ExpOps = Desc.getNumOperands();
+  // Only check if all expected operands are present.
+  if (NumOps < ExpOps || ExpOps == 0)
+    return 0;
+
+  // For ALU shimm forms (rrs/rsr/rss) and SOP rs, the f operand is the
+  // last operand in the ins list. It's not wired to encoding bits, but
+  // we read it here to decide whether to flip sentinel 63->61.
+  switch (Opc) {
+  // ALU3 shimm variants: last operand is f
+  case ARC4::ADD_rrs: case ARC4::ADD_rsr: case ARC4::ADD_rss:
+  case ARC4::ADD_0rs: case ARC4::ADD_0sr: case ARC4::ADD_0ss:
+  case ARC4::ADC_rrs: case ARC4::ADC_rsr: case ARC4::ADC_rss:
+  case ARC4::ADC_0rs: case ARC4::ADC_0sr: case ARC4::ADC_0ss:
+  case ARC4::SUB_rrs: case ARC4::SUB_rsr: case ARC4::SUB_rss:
+  case ARC4::SUB_0rs: case ARC4::SUB_0sr: case ARC4::SUB_0ss:
+  case ARC4::SBC_rrs: case ARC4::SBC_rsr: case ARC4::SBC_rss:
+  case ARC4::SBC_0rs: case ARC4::SBC_0sr: case ARC4::SBC_0ss:
+  case ARC4::AND_rrs: case ARC4::AND_rsr: case ARC4::AND_rss:
+  case ARC4::AND_0rs: case ARC4::AND_0sr: case ARC4::AND_0ss:
+  case ARC4::OR_rrs:  case ARC4::OR_rsr:  case ARC4::OR_rss:
+  case ARC4::OR_0rs:  case ARC4::OR_0sr:  case ARC4::OR_0ss:
+  case ARC4::BIC_rrs: case ARC4::BIC_rsr: case ARC4::BIC_rss:
+  case ARC4::BIC_0rs: case ARC4::BIC_0sr: case ARC4::BIC_0ss:
+  case ARC4::XOR_rrs: case ARC4::XOR_rsr: case ARC4::XOR_rss:
+  case ARC4::XOR_0rs: case ARC4::XOR_0sr: case ARC4::XOR_0ss:
+  // SOP shimm variants
+  case ARC4::ASL_rs:  case ARC4::ASL_0s:
+  case ARC4::ASR_rs:  case ARC4::ASR_0s:
+  case ARC4::LSR_rs:  case ARC4::LSR_0s:
+  case ARC4::ROR_rs:  case ARC4::ROR_0s:
+  case ARC4::RRC_rs:  case ARC4::RRC_0s:
+  case ARC4::SEXB_rs: case ARC4::SEXB_0s:
+  case ARC4::SEXW_rs: case ARC4::SEXW_0s:
+  case ARC4::EXTB_rs: case ARC4::EXTB_0s:
+  case ARC4::EXTW_rs: case ARC4::EXTW_0s:
+    // f is the last operand.
+    return Inst.getOperand(ExpOps - 1).getImm();
+  default:
+    return 0;
+  }
 }
 
 void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
@@ -99,87 +148,31 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
   ++MCNumEmitted;
 
   const MCInstrDesc &Desc = MCII.get(Inst.getOpcode());
-  unsigned NumDefOps = Desc.getNumOperands();
-  unsigned NumInstOps = Inst.getNumOperands();
 
-  // Check for trailing annotation operands (condition code, flag, delay slot).
-  // These are appended by the AsmParser beyond the expected operand count.
-  // Convention: 3 trailing imm operands = [cc, flag, delay].
-  if (NumInstOps > NumDefOps && (NumInstOps - NumDefOps) == 3) {
-    int CC = Inst.getOperand(NumDefOps).getImm();
-    int Flag = Inst.getOperand(NumDefOps + 1).getImm();
-    int Delay = Inst.getOperand(NumDefOps + 2).getImm();
-
-    uint32_t V = static_cast<uint32_t>(Value);
-    unsigned Opcode5 = (V >> 27) & 0x1F;
-
-    // Apply condition code: bits [4:0].
-    // Only for non-shimm instructions (shimm uses bits [8:0] for the value).
-    if (CC != 0) {
-      bool BShimm, CShimm;
-      detectShimmFields(V, BShimm, CShimm);
-      if (!BShimm && !CShimm) {
-        // Safe to set condition code in bits [4:0].
-        V = (V & ~0x1FU) | (CC & 0x1F);
-      }
-    }
-
-    // Apply flag bit.
-    if (Flag != 0) {
-      bool BShimm, CShimm;
-      detectShimmFields(V, BShimm, CShimm);
-      if (BShimm || CShimm) {
-        // Shimm form: change sentinel 63->61 in the shimm field(s).
-        // Sentinel 63 = 0b111111, sentinel 61 = 0b111101.
-        if (CShimm) {
-          unsigned CField = (V >> 9) & 0x3F;
-          if (CField == 63) {
-            V &= ~(0x3FU << 9);
-            V |= (61U << 9);
-          }
-        }
-        if (BShimm) {
-          unsigned BField = (V >> 15) & 0x3F;
-          if (BField == 63) {
-            V &= ~(0x3FU << 15);
-            V |= (61U << 15);
-          }
-        }
-      } else {
-        // Non-shimm form: set bit 8.
-        V |= (1U << 8);
-      }
-    }
-
-    // Apply delay slot: bits [6:5]. Only for branch/jump opcodes (4-7).
-    if (Delay != 0 && Opcode5 >= 4 && Opcode5 <= 7) {
-      V = (V & ~(0x3U << 5)) | ((Delay & 0x3) << 5);
-    }
-
-    Value = V;
-  }
-
-  // Default delay slot for branch-and-link (BL) and jump-and-link with limm
-  // (JL_l): when no explicit delay suffix was specified, use .jd (bits[6:5]=10)
-  // instead of .nd (00). The architecture requires .jd for correct operation
-  // of the delay slot on link instructions — the delay slot instruction must
-  // execute only when the jump is taken.
-  //
-  // This applies when there are no trailing annotations (user wrote bare
-  // "bl target" or "jl target" without any suffix). When annotations are
-  // present, the user explicitly chose a delay mode and we respect it.
+  // Shimm sentinel flip: for shimm instructions where the f operand = 1,
+  // change sentinel 63 -> 61 in the register field(s). This is the only
+  // remaining post-hoc fixup because TableGen can't conditionally set bits.
   {
-    unsigned Opc = Inst.getOpcode();
-    if (NumInstOps == NumDefOps) {
-      // No trailing annotations — apply default .jd ONLY for jump-and-link
-      // with limm (JL_l). The architecture requires .jd so the delay slot
-      // executes only when the jump is taken, avoiding corruption of the
-      // return address. All other branch/jump forms default to .nd.
-      if (Opc == ARC4::JL_l) {
-        uint32_t V = static_cast<uint32_t>(Value);
-        V = (V & ~(0x3U << 5)) | (0x2U << 5);  // .jd = 2
-        Value = V;
+    int FlagVal = getShimmFlagValue(Inst, Desc);
+    if (FlagVal != 0) {
+      uint32_t V = static_cast<uint32_t>(Value);
+      bool BShimm, CShimm;
+      detectShimmFields(V, BShimm, CShimm);
+      if (CShimm) {
+        unsigned CField = (V >> 9) & 0x3F;
+        if (CField == 63) {
+          V &= ~(0x3FU << 9);
+          V |= (61U << 9);
+        }
       }
+      if (BShimm) {
+        unsigned BField = (V >> 15) & 0x3F;
+        if (BField == 63) {
+          V &= ~(0x3FU << 15);
+          V |= (61U << 15);
+        }
+      }
+      Value = V;
     }
   }
 
@@ -189,11 +182,12 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &Inst,
 
   // For 8-byte instructions (limm), emit the extra 32-bit limm word.
   if (Desc.getSize() == 8) {
-    // The limm value is in an immediate operand. Find it (among the real
-    // operands, not the trailing annotations).
+    // The limm value is in an immediate operand. Find it among the operands.
+    // Skip suffix operands (f, q, n) which are also immediates — the limm
+    // is always among the first few operands (visible in AsmString).
     uint32_t LimmVal = 0;
-    unsigned SearchEnd = (NumInstOps > NumDefOps) ? NumDefOps : NumInstOps;
-    for (unsigned I = 0; I < SearchEnd; ++I) {
+    unsigned NumOps = Inst.getNumOperands();
+    for (unsigned I = 0; I < NumOps; ++I) {
       const MCOperand &MO = Inst.getOperand(I);
       if (MO.isImm()) {
         LimmVal = static_cast<uint32_t>(MO.getImm());

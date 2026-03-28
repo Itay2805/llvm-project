@@ -127,6 +127,12 @@ class ARC4AsmParser : public MCTargetAsmParser {
   bool parseOperand(OperandVector &Operands);
   bool parseRegOrImm(OperandVector &Operands);
 
+  // Suffix state parsed from the mnemonic, used by matchAndEmitInstruction.
+  int ParsedCondCode = 0;     // 5-bit condition code (0 = always)
+  int ParsedFlagBit = 0;      // 1 = .f suffix present
+  int ParsedDelaySlot = 0;    // 0=nd, 1=d, 2=jd
+  bool ParsedHasExplicitSuffix = false;  // true if any dot-suffix was parsed
+
 #define GET_ASSEMBLER_HEADER
 #include "ARC4GenAsmMatcher.inc"
 
@@ -279,15 +285,15 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
                                      OperandVector &Operands) {
   // Strip mnemonic suffixes.
   // Load/store size suffixes transform the mnemonic: ld.b -> ldb, st.w -> stw.
-  // .f, .q (condition codes), .d/.nd/.jd (delay slots) are recorded as
-  // trailing operands on the MCInst for the encoder to apply.
+  // .f, .q (condition codes), .d/.nd/.jd (delay slots) are stored in member
+  // variables for matchAndEmitInstruction to use when filling suffix operands.
   SmallString<16> MnemonicBuf;
 
-  // Tracked suffix state.
-  int CondCode = 0;     // 5-bit condition code (0 = always)
-  int FlagBit = 0;      // 1 = .f suffix present
-  int DelaySlot = 0;    // 0=nd, 1=d, 2=jd
-  bool HasExplicitSuffix = false;  // true if any dot-suffix was parsed
+  // Reset suffix state for this instruction.
+  ParsedCondCode = 0;
+  ParsedFlagBit = 0;
+  ParsedDelaySlot = 0;
+  ParsedHasExplicitSuffix = false;
 
   // Process dot-separated suffixes from left to right.
   StringRef Remaining = Name;
@@ -308,15 +314,15 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
 
     // Flag suffix.
     if (Suffix == "f") {
-      FlagBit = 1;
-      HasExplicitSuffix = true;
+      ParsedFlagBit = 1;
+      ParsedHasExplicitSuffix = true;
       continue;
     }
 
     // Delay slot suffixes.
-    if (Suffix == "nd") { DelaySlot = 0; HasExplicitSuffix = true; continue; }
-    if (Suffix == "d")  { DelaySlot = 1; HasExplicitSuffix = true; continue; }
-    if (Suffix == "jd") { DelaySlot = 2; HasExplicitSuffix = true; continue; }
+    if (Suffix == "nd") { ParsedDelaySlot = 0; ParsedHasExplicitSuffix = true; continue; }
+    if (Suffix == "d")  { ParsedDelaySlot = 1; ParsedHasExplicitSuffix = true; continue; }
+    if (Suffix == "jd") { ParsedDelaySlot = 2; ParsedHasExplicitSuffix = true; continue; }
 
     // Sign extend, writeback, cache bypass - strip for now.
     if (Suffix == "x" || Suffix == "a" || Suffix == "di")
@@ -325,8 +331,8 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     // Condition codes.
     int CC = mapConditionCode(Suffix);
     if (CC >= 0) {
-      CondCode = CC;
-      HasExplicitSuffix = true;
+      ParsedCondCode = CC;
+      ParsedHasExplicitSuffix = true;
       continue;
     }
 
@@ -467,24 +473,6 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
     }
   }
 
-  // Append trailing annotation operands for the MCCodeEmitter.
-  // Convention: condition code, flag bit, delay slot — in that order.
-  // Append if any are non-default, OR if any explicit suffix was parsed
-  // (so the encoder can distinguish "no suffix" from explicit ".nd").
-  if (CondCode != 0 || FlagBit != 0 || DelaySlot != 0 || HasExplicitSuffix) {
-    // We use ARC4Operand::createImm with MCConstantExpr to carry the values.
-    // These will become MCOperand::createImm in the MCInst.
-    // Marker: condition code
-    Operands.push_back(ARC4Operand::createImm(
-        MCConstantExpr::create(CondCode, getContext()), NameLoc, NameLoc));
-    // Marker: flag bit
-    Operands.push_back(ARC4Operand::createImm(
-        MCConstantExpr::create(FlagBit, getContext()), NameLoc, NameLoc));
-    // Marker: delay slot
-    Operands.push_back(ARC4Operand::createImm(
-        MCConstantExpr::create(DelaySlot, getContext()), NameLoc, NameLoc));
-  }
-
   return false;
 }
 
@@ -493,11 +481,8 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
 static bool isBranchOrJump(unsigned Opc) {
   switch (Opc) {
   case ARC4::B:
-  case ARC4::Bcc:
   case ARC4::BL:
-  case ARC4::BLcc:
   case ARC4::LP_insn:
-  case ARC4::LP_cc:
   case ARC4::J_r:
   case ARC4::J_l:
   case ARC4::JL_r:
@@ -658,43 +643,100 @@ static bool tryMatchStoreSRS(StringRef Mnemonic, OperandVector &Operands,
   return false;
 }
 
+/// Set the suffix operands (f, q, n) in the MCInst. These are real instruction
+/// operands that are not in the AsmString, so the matcher's ConvertToMCInst
+/// fills them with default 0 values. We overwrite them with the parsed suffix
+/// values from the mnemonic.
+///
+/// Suffix operands are always the LAST N operands in the MCInst:
+///   ALU rrr/rrl/rlr, SOP rr/rl: last 2 = f, q
+///   ALU rrs/rsr/rss, SOP rs:    last 1 = f
+///   Branch B/BL/LP:              last 2 = q, n
+///   Jump J_r/J_l/JL_r/JL_l:     last 3 = f, q, n
+///   Flag_r/Flag_l:               last 1 = q
+///   Everything else:             none
+static void setSuffixOperands(MCInst &Inst, const MCInstrInfo &MCII,
+                              int FlagBit, int CondCode, int DelaySlot) {
+  unsigned Opc = Inst.getOpcode();
+  unsigned N = Inst.getNumOperands();
+
+  switch (Opc) {
+  // Jump instructions: last 3 operands are f, q, n
+  case ARC4::J_r: case ARC4::J_l:
+  case ARC4::JL_r: case ARC4::JL_l:
+    if (N >= 3) {
+      Inst.getOperand(N - 3).setImm(FlagBit);
+      Inst.getOperand(N - 2).setImm(CondCode);
+      Inst.getOperand(N - 1).setImm(DelaySlot);
+    }
+    return;
+
+  // Branch instructions: last 2 operands are q, n
+  case ARC4::B: case ARC4::BL: case ARC4::LP_insn:
+    if (N >= 2) {
+      Inst.getOperand(N - 2).setImm(CondCode);
+      Inst.getOperand(N - 1).setImm(DelaySlot);
+    }
+    return;
+
+  // Flag_r/Flag_l: last operand is q
+  case ARC4::FLAG_r: case ARC4::FLAG_l:
+    if (N >= 1)
+      Inst.getOperand(N - 1).setImm(CondCode);
+    return;
+
+  // FLAG_s has no suffix operands
+  case ARC4::FLAG_s:
+    return;
+
+  default:
+    break;
+  }
+
+  // Instructions with NO suffix operands: loads, stores, NOP, BRK, SLEEP, SWI.
+  // Must check these BEFORE the shimm form check, since loads/stores also use
+  // shimm but don't have an f operand.
+  switch (Opc) {
+  case ARC4::NOP: case ARC4::BRK: case ARC4::SLEEP: case ARC4::SWI:
+  // All load instructions (opcode 0 and 1)
+  case ARC4::LD_rr:  case ARC4::LD_rl:  case ARC4::LD_lr:
+  case ARC4::LD_rs:  case ARC4::LD_ss:  case ARC4::LD_l:
+  case ARC4::LDB_rr: case ARC4::LDB_rl: case ARC4::LDB_lr:
+  case ARC4::LDB_rs: case ARC4::LDB_ss: case ARC4::LDB_l:
+  case ARC4::LDW_rr: case ARC4::LDW_rl: case ARC4::LDW_lr:
+  case ARC4::LDW_rs: case ARC4::LDW_ss: case ARC4::LDW_l:
+  // All store instructions (opcode 2)
+  case ARC4::ST_rrs:  case ARC4::ST_srs:  case ARC4::ST_rss:
+  case ARC4::ST_sss:  case ARC4::ST_rls:  case ARC4::ST_lrs:
+  case ARC4::ST_lls:  case ARC4::ST_sls:
+  case ARC4::STB_rrs: case ARC4::STB_srs: case ARC4::STB_rss:
+  case ARC4::STB_sss: case ARC4::STB_rls: case ARC4::STB_lrs:
+  case ARC4::STB_lls: case ARC4::STB_sls:
+  case ARC4::STW_rrs: case ARC4::STW_srs: case ARC4::STW_rss:
+  case ARC4::STW_sss: case ARC4::STW_rls: case ARC4::STW_lrs:
+  case ARC4::STW_lls: case ARC4::STW_sls:
+    return;  // No suffix operands
+  default:
+    break;
+  }
+
+  // ALU/SOP instructions: check if shimm or non-shimm form.
+  if (isShimmForm(Opc)) {
+    // Shimm ALU/SOP forms: last operand is f (no q, bits overlap with shimm)
+    if (N >= 1)
+      Inst.getOperand(N - 1).setImm(FlagBit);
+  } else if (N >= 2) {
+    // Non-shimm ALU/SOP form: last 2 operands are f, q
+    Inst.getOperand(N - 2).setImm(FlagBit);
+    Inst.getOperand(N - 1).setImm(CondCode);
+  }
+}
+
 bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                             OperandVector &Operands,
                                             MCStreamer &Out,
                                             uint64_t &ErrorInfo,
                                             bool MatchingInlineAsm) {
-  // If trailing annotation operands were appended (.f, .q, delay slot),
-  // temporarily remove them so the matcher sees only real operands.
-  // The annotations are always the last 3 operands when present.
-  SmallVector<std::unique_ptr<MCParsedAsmOperand>, 3> Annotations;
-  bool HasAnnotations = false;
-
-  // Detect annotations: they are 3 trailing immediate operands added by
-  // parseInstruction when any suffix (.f, .q, delay slot) was present.
-  // Minimum layout: token + at least 0 real operands + 3 annotations = 4.
-  if (Operands.size() >= 4) {
-    size_t N = Operands.size();
-    auto *A1 = static_cast<ARC4Operand *>(Operands[N - 3].get());
-    auto *A2 = static_cast<ARC4Operand *>(Operands[N - 2].get());
-    auto *A3 = static_cast<ARC4Operand *>(Operands[N - 1].get());
-    // Annotations are immediates whose SMLoc matches the mnemonic (NameLoc).
-    // We check that all three are immediates and share the same start location
-    // (the mnemonic location set during parseInstruction).
-    if (A1->isImm() && A2->isImm() && A3->isImm() &&
-        A1->getStartLoc() == A2->getStartLoc() &&
-        A2->getStartLoc() == A3->getStartLoc() &&
-        A1->getStartLoc() == Operands[0]->getStartLoc()) {
-      HasAnnotations = true;
-      // Pop in reverse order.
-      Annotations.push_back(std::move(Operands[N - 1]));
-      Operands.pop_back();
-      Annotations.push_back(std::move(Operands[N - 2]));
-      Operands.pop_back();
-      Annotations.push_back(std::move(Operands[N - 3]));
-      Operands.pop_back();
-    }
-  }
-
   MCInst Inst;
 
   // Try to match store shimm forms (srs, sss) before the normal matcher.
@@ -705,53 +747,41 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   bool StoreShimmMatched = tryMatchStoreSRS(Mnemonic, Operands, Inst);
 
   if (StoreShimmMatched) {
-    // Re-attach annotation operands to the MCInst for the encoder.
-    if (HasAnnotations) {
-      auto *CC = static_cast<ARC4Operand *>(Annotations[2].get());
-      auto *Flag = static_cast<ARC4Operand *>(Annotations[1].get());
-      auto *Delay = static_cast<ARC4Operand *>(Annotations[0].get());
-      CC->addImmOperands(Inst, 1);
-      Flag->addImmOperands(Inst, 1);
-      Delay->addImmOperands(Inst, 1);
-    }
+    // Store shimm forms have no suffix operands (no f/q/n fields).
+    // Validate: condition codes and delay slots are not allowed.
+    if (ParsedCondCode != 0 && isShimmForm(Inst.getOpcode()))
+      return Error(IDLoc,
+                   "condition code not allowed with short immediate operand");
+    if (ParsedDelaySlot != 0)
+      return Error(IDLoc,
+                   "delay slot modifier not allowed on this instruction");
     Out.emitInstruction(Inst, getSTI());
     return false;
   }
 
   switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm)) {
   case Match_Success: {
-    // Re-attach annotation operands to the MCInst for the encoder.
-    if (HasAnnotations) {
-      // Annotations were stored in reverse order: [delay, flag, cc].
-      // We want cc, flag, delay in the MCInst.
-      auto *CC = static_cast<ARC4Operand *>(Annotations[2].get());
-      auto *Flag = static_cast<ARC4Operand *>(Annotations[1].get());
-      auto *Delay = static_cast<ARC4Operand *>(Annotations[0].get());
+    // Validate suffix compatibility before filling operands.
+    if (ParsedCondCode != 0 && isShimmForm(Inst.getOpcode()))
+      return Error(IDLoc,
+                   "condition code not allowed with short immediate operand");
+    if (ParsedDelaySlot != 0 && !isBranchOrJump(Inst.getOpcode()))
+      return Error(IDLoc,
+                   "delay slot modifier not allowed on this instruction");
 
-      // Extract annotation values for validation.
-      int CCVal = 0, DelayVal = 0;
-      if (const auto *CE = dyn_cast<MCConstantExpr>(CC->Expr))
-        CCVal = CE->getValue();
-      if (const auto *CE = dyn_cast<MCConstantExpr>(Delay->Expr))
-        DelayVal = CE->getValue();
+    // Fill in the suffix operands (f, q, n) that aren't in the AsmString.
+    // The matcher created an MCInst with only visible operands; we append
+    // the suffix values so getBinaryCodeForInstr() can encode them.
+    setSuffixOperands(Inst, MII, ParsedFlagBit, ParsedCondCode,
+                       ParsedDelaySlot);
 
-      // Bug 3 fix: condition codes are invalid with shimm forms because
-      // the shimm value occupies bits [8:0] which overlap with the condition
-      // code field [4:0]. Emit an error if a condition code was specified.
-      if (CCVal != 0 && isShimmForm(Inst.getOpcode()))
-        return Error(IDLoc,
-                     "condition code not allowed with short immediate operand");
-
-      // Bug 4 fix: delay slot modifier (.d/.jd) is only valid on branch
-      // and jump instructions (opcodes 4-7). Emit an error otherwise.
-      if (DelayVal != 0 && !isBranchOrJump(Inst.getOpcode()))
-        return Error(IDLoc,
-                     "delay slot modifier not allowed on this instruction");
-
-      CC->addImmOperands(Inst, 1);
-      Flag->addImmOperands(Inst, 1);
-      Delay->addImmOperands(Inst, 1);
+    // Default delay slot for JL_l: .jd (2) when no explicit suffix was parsed.
+    if (Inst.getOpcode() == ARC4::JL_l && !ParsedHasExplicitSuffix) {
+      // The delay slot is the last operand.
+      unsigned NIdx = Inst.getNumOperands() - 1;
+      Inst.getOperand(NIdx).setImm(2);  // .jd = 2
     }
+
     Out.emitInstruction(Inst, getSTI());
     return false;
   }

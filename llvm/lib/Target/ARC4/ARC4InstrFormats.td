@@ -75,12 +75,16 @@ class ARC4InstALU3_rrr<bits<5> opcode, dag outs, dag ins, string asmstr,
   bits<6> a;
   bits<6> b;
   bits<6> c;
+  bits<1> f;   // flag bit, wired to bit [8]
+  bits<5> q;   // condition code, wired to bits [4:0]
 
   let Inst{31-27} = opcode;
   let Inst{26-21} = a;
   let Inst{20-15} = b;
   let Inst{14-9}  = c;
-  let Inst{8-0}   = 0;
+  let Inst{8}     = f;
+  let Inst{7-5}   = 0;
+  let Inst{4-0}   = q;
 }
 
 // --- rrs: op a, b, shimm  (reg, reg, short-imm) ---
@@ -93,6 +97,7 @@ class ARC4InstALU3_rrs<bits<5> opcode, dag outs, dag ins, string asmstr,
   bits<6> a;
   bits<6> b;
   bits<9> shimm;
+  bits<1> f;   // NOT wired to encoding — MCCodeEmitter flips sentinel 63->61
 
   let Inst{31-27} = opcode;
   let Inst{26-21} = a;
@@ -109,6 +114,7 @@ class ARC4InstALU3_rsr<bits<5> opcode, dag outs, dag ins, string asmstr,
   bits<6> a;
   bits<6> c;
   bits<9> shimm;
+  bits<1> f;   // NOT wired to encoding — MCCodeEmitter flips sentinel 63->61
 
   let Inst{31-27} = opcode;
   let Inst{26-21} = a;
@@ -124,6 +130,7 @@ class ARC4InstALU3_rss<bits<5> opcode, dag outs, dag ins, string asmstr,
     : ARC4Inst<outs, ins, asmstr, pattern> {
   bits<6> a;
   bits<9> shimm;
+  bits<1> f;   // NOT wired to encoding — MCCodeEmitter flips sentinel 63->61
 
   let Inst{31-27} = opcode;
   let Inst{26-21} = a;
@@ -139,12 +146,16 @@ class ARC4InstALU3_rrl<bits<5> opcode, dag outs, dag ins, string asmstr,
     : ARC4Inst8<outs, ins, asmstr, pattern> {
   bits<6> a;
   bits<6> b;
+  bits<1> f;   // flag bit, wired to bit [8]
+  bits<5> q;   // condition code, wired to bits [4:0]
 
   let Inst{31-27} = opcode;
   let Inst{26-21} = a;
   let Inst{20-15} = b;
   let Inst{14-9}  = 0b111110;  // sentinel 62 = LIMM
-  let Inst{8-0}   = 0;
+  let Inst{8}     = f;
+  let Inst{7-5}   = 0;
+  let Inst{4-0}   = q;
 }
 
 // --- rlr: op a, limm, c  (reg, long-imm, reg) ---
@@ -154,12 +165,16 @@ class ARC4InstALU3_rlr<bits<5> opcode, dag outs, dag ins, string asmstr,
     : ARC4Inst8<outs, ins, asmstr, pattern> {
   bits<6> a;
   bits<6> c;
+  bits<1> f;   // flag bit, wired to bit [8]
+  bits<5> q;   // condition code, wired to bits [4:0]
 
   let Inst{31-27} = opcode;
   let Inst{26-21} = a;
   let Inst{20-15} = 0b111110;  // sentinel 62 = LIMM
   let Inst{14-9}  = c;
-  let Inst{8-0}   = 0;
+  let Inst{8}     = f;
+  let Inst{7-5}   = 0;
+  let Inst{4-0}   = q;
 }
 
 //===----------------------------------------------------------------------===//
@@ -174,12 +189,16 @@ class ARC4InstSOP_rr<bits<6> subop, dag outs, dag ins, string asmstr,
     : ARC4Inst<outs, ins, asmstr, pattern> {
   bits<6> a;
   bits<6> b;
+  bits<1> f;   // flag bit, wired to bit [8]
+  bits<5> q;   // condition code, wired to bits [4:0]
 
   let Inst{31-27} = 0b00011;  // opcode 3
   let Inst{26-21} = a;
   let Inst{20-15} = b;
   let Inst{14-9}  = subop;
-  let Inst{8-0}   = 0;
+  let Inst{8}     = f;
+  let Inst{7-5}   = 0;
+  let Inst{4-0}   = q;
 }
 
 // --- rs: op a, shimm  (reg, short-imm) ---
@@ -189,6 +208,7 @@ class ARC4InstSOP_rs<bits<6> subop, dag outs, dag ins, string asmstr,
     : ARC4Inst<outs, ins, asmstr, pattern> {
   bits<6> a;
   bits<9> shimm;
+  bits<1> f;   // NOT wired to encoding — MCCodeEmitter flips sentinel 63->61
 
   let Inst{31-27} = 0b00011;  // opcode 3
   let Inst{26-21} = a;
@@ -203,12 +223,16 @@ class ARC4InstSOP_rl<bits<6> subop, dag outs, dag ins, string asmstr,
                      list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
   bits<6> a;
+  bits<1> f;   // flag bit, wired to bit [8]
+  bits<5> q;   // condition code, wired to bits [4:0]
 
   let Inst{31-27} = 0b00011;  // opcode 3
   let Inst{26-21} = a;
   let Inst{20-15} = 0b111110;  // sentinel 62 = LIMM
   let Inst{14-9}  = subop;
-  let Inst{8-0}   = 0;
+  let Inst{8}     = f;
+  let Inst{7-5}   = 0;
+  let Inst{4-0}   = q;
 }
 
 //===----------------------------------------------------------------------===//
@@ -251,6 +275,7 @@ class ARC4InstJumpReg<bit link, dag outs, dag ins, string asmstr,
                       list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
   bits<6> b;
+  bits<1> f;   // flag bit, wired to bit [8]
   bits<2> n;
   bits<5> q;
 
@@ -259,7 +284,7 @@ class ARC4InstJumpReg<bit link, dag outs, dag ins, string asmstr,
   let Inst{20-15} = b;
   let Inst{14-10} = 0;        // C[14:10] = 0
   let Inst{9}     = link;
-  let Inst{8}     = 0;        // f = 0 default (MCCodeEmitter handles .f)
+  let Inst{8}     = f;
   let Inst{7}     = 0;        // forced 0 per R(0,7,1)
   let Inst{6-5}   = n;
   let Inst{4-0}   = q;
@@ -269,6 +294,7 @@ class ARC4InstJumpReg<bit link, dag outs, dag ins, string asmstr,
 class ARC4InstJumpLimm<bit link, dag outs, dag ins, string asmstr,
                        list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  bits<1> f;   // flag bit, wired to bit [8]
   bits<2> n;
   bits<5> q;
 
@@ -277,7 +303,7 @@ class ARC4InstJumpLimm<bit link, dag outs, dag ins, string asmstr,
   let Inst{20-15} = 0b111110; // B = sentinel 62 = LIMM
   let Inst{14-10} = 0;        // C[14:10] = 0
   let Inst{9}     = link;
-  let Inst{8}     = 0;        // f = 0 default
+  let Inst{8}     = f;
   let Inst{7}     = 0;        // forced 0
   let Inst{6-5}   = n;
   let Inst{4-0}   = q;
@@ -606,12 +632,14 @@ class ARC4InstST_sls<dag outs, dag ins, string asmstr, list<dag> pattern>
 class ARC4InstFlag_r<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst<outs, ins, asmstr, pattern> {
   bits<6> b;
+  bits<5> q;   // condition code, wired to bits [4:0]
 
   let Inst{31-27} = 0b00011;  // opcode 3
   let Inst{26-21} = 0b111101; // A = sentinel 61 = SHIMM_UPDATE (discard)
   let Inst{20-15} = b;
   let Inst{14-9}  = 0;        // C = 0
-  let Inst{8-0}   = 0;
+  let Inst{8-5}   = 0;
+  let Inst{4-0}   = q;
 }
 
 // --- flag shimm ---
@@ -629,9 +657,12 @@ class ARC4InstFlag_s<dag outs, dag ins, string asmstr, list<dag> pattern>
 // --- flag limm --- Size = 8.
 class ARC4InstFlag_l<dag outs, dag ins, string asmstr, list<dag> pattern>
     : ARC4Inst8<outs, ins, asmstr, pattern> {
+  bits<5> q;   // condition code, wired to bits [4:0]
+
   let Inst{31-27} = 0b00011;
   let Inst{26-21} = 0b111101; // A = sentinel 61
   let Inst{20-15} = 0b111110; // B = LIMM sentinel
   let Inst{14-9}  = 0;        // C = 0
-  let Inst{8-0}   = 0;
+  let Inst{8-5}   = 0;
+  let Inst{4-0}   = q;
 }

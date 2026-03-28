@@ -97,64 +97,67 @@ def NOP : ARC4Inst<(outs), (ins), "nop", []> {
 
 multiclass ALU3<bits<5> opcode, string mnemonic> {
   // --- Result-producing variants ---
+  // Non-shimm forms: f wired to bit[8], q wired to bits[4:0]
   def _rrr : ARC4InstALU3_rrr<opcode,
-    (outs GPR32:$a), (ins GPR32:$b, GPR32:$c),
+    (outs GPR32:$a), (ins GPR32:$b, GPR32:$c, i32imm:$f, i32imm:$q),
     mnemonic # "\t$a, $b, $c", []>;
 
+  // Shimm forms: f not wired (MCCodeEmitter flips sentinel), no q (bits overlap)
   def _rrs : ARC4InstALU3_rrs<opcode,
-    (outs GPR32:$a), (ins GPR32:$b, simm9:$shimm),
+    (outs GPR32:$a), (ins GPR32:$b, simm9:$shimm, i32imm:$f),
     mnemonic # "\t$a, $b, $shimm", []>;
 
   def _rsr : ARC4InstALU3_rsr<opcode,
-    (outs GPR32:$a), (ins simm9:$shimm, GPR32:$c),
+    (outs GPR32:$a), (ins simm9:$shimm, GPR32:$c, i32imm:$f),
     mnemonic # "\t$a, $shimm, $c", []>;
 
   def _rss : ARC4InstALU3_rss<opcode,
-    (outs GPR32:$a), (ins simm9:$shimm),
+    (outs GPR32:$a), (ins simm9:$shimm, i32imm:$f),
     mnemonic # "\t$a, $shimm, $shimm", []>;
 
+  // Limm forms: f wired to bit[8], q wired to bits[4:0]
   def _rrl : ARC4InstALU3_rrl<opcode,
-    (outs GPR32:$a), (ins GPR32:$b, limm32:$limm),
+    (outs GPR32:$a), (ins GPR32:$b, limm32:$limm, i32imm:$f, i32imm:$q),
     mnemonic # "\t$a, $b, $limm", []>;
 
   def _rlr : ARC4InstALU3_rlr<opcode,
-    (outs GPR32:$a), (ins limm32:$limm, GPR32:$c),
+    (outs GPR32:$a), (ins limm32:$limm, GPR32:$c, i32imm:$f, i32imm:$q),
     mnemonic # "\t$a, $limm, $c", []>;
 
   // --- Discard variants (A = sentinel 61 = SHIMM_UPDATE) ---
   let hasSideEffects = 1 in {
     def _0rr : ARC4InstALU3_rrr<opcode,
-      (outs), (ins GPR32:$b, GPR32:$c),
+      (outs), (ins GPR32:$b, GPR32:$c, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $b, $c", []> {
       let a = 0b111101;  // sentinel 61
     }
 
     def _0rs : ARC4InstALU3_rrs<opcode,
-      (outs), (ins GPR32:$b, simm9:$shimm),
+      (outs), (ins GPR32:$b, simm9:$shimm, i32imm:$f),
       mnemonic # "\t0, $b, $shimm", []> {
       let a = 0b111101;
     }
 
     def _0sr : ARC4InstALU3_rsr<opcode,
-      (outs), (ins simm9:$shimm, GPR32:$c),
+      (outs), (ins simm9:$shimm, GPR32:$c, i32imm:$f),
       mnemonic # "\t0, $shimm, $c", []> {
       let a = 0b111101;
     }
 
     def _0ss : ARC4InstALU3_rss<opcode,
-      (outs), (ins simm9:$shimm),
+      (outs), (ins simm9:$shimm, i32imm:$f),
       mnemonic # "\t0, $shimm, $shimm", []> {
       let a = 0b111101;
     }
 
     def _0rl : ARC4InstALU3_rrl<opcode,
-      (outs), (ins GPR32:$b, limm32:$limm),
+      (outs), (ins GPR32:$b, limm32:$limm, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $b, $limm", []> {
       let a = 0b111101;
     }
 
     def _0lr : ARC4InstALU3_rlr<opcode,
-      (outs), (ins limm32:$limm, GPR32:$c),
+      (outs), (ins limm32:$limm, GPR32:$c, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $limm, $c", []> {
       let a = 0b111101;
     }
@@ -179,34 +182,37 @@ defm XOR : ALU3<0b01111, "xor">;  // opcode 15
 //===----------------------------------------------------------------------===//
 
 multiclass SOP<bits<6> subop, string mnemonic> {
+  // Non-shimm forms: f wired to bit[8], q wired to bits[4:0]
   def _rr : ARC4InstSOP_rr<subop,
-    (outs GPR32:$a), (ins GPR32:$b),
+    (outs GPR32:$a), (ins GPR32:$b, i32imm:$f, i32imm:$q),
     mnemonic # "\t$a, $b", []>;
 
+  // Shimm form: f not wired (MCCodeEmitter flips sentinel), no q
   def _rs : ARC4InstSOP_rs<subop,
-    (outs GPR32:$a), (ins simm9:$shimm),
+    (outs GPR32:$a), (ins simm9:$shimm, i32imm:$f),
     mnemonic # "\t$a, $shimm", []>;
 
+  // Limm form: f wired to bit[8], q wired to bits[4:0]
   def _rl : ARC4InstSOP_rl<subop,
-    (outs GPR32:$a), (ins limm32:$limm),
+    (outs GPR32:$a), (ins limm32:$limm, i32imm:$f, i32imm:$q),
     mnemonic # "\t$a, $limm", []>;
 
   // --- Discard variants ---
   let hasSideEffects = 1 in {
     def _0r : ARC4InstSOP_rr<subop,
-      (outs), (ins GPR32:$b),
+      (outs), (ins GPR32:$b, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $b", []> {
       let a = 0b111101;  // sentinel 61
     }
 
     def _0s : ARC4InstSOP_rs<subop,
-      (outs), (ins simm9:$shimm),
+      (outs), (ins simm9:$shimm, i32imm:$f),
       mnemonic # "\t0, $shimm", []> {
       let a = 0b111101;
     }
 
     def _0l : ARC4InstSOP_rl<subop,
-      (outs), (ins limm32:$limm),
+      (outs), (ins limm32:$limm, i32imm:$f, i32imm:$q),
       mnemonic # "\t0, $limm", []> {
       let a = 0b111101;
     }
@@ -228,50 +234,21 @@ defm EXTW : SOP<0b001000, "extw">;
 //===----------------------------------------------------------------------===//
 
 let isBranch = 1, isTerminator = 1 in {
-  let isBarrier = 1 in
   def B : ARC4InstBranch<0b00100,
-    (outs), (ins brtarget20:$offset),
-    "b\t$offset", []> {
-    let n = 0;
-    let q = 0;
-  }
-
-  def Bcc : ARC4InstBranch<0b00100,
-    (outs), (ins brtarget20:$offset, i32imm:$q),
-    "b\t$offset", []> {
-    let n = 0;
-  }
+    (outs), (ins brtarget20:$offset, i32imm:$q, i32imm:$n),
+    "b\t$offset", []>;
 }
 
 let isCall = 1 in {
-  let isBarrier = 1 in
   def BL : ARC4InstBranch<0b00101,
-    (outs), (ins brtarget20:$offset),
-    "bl\t$offset", []> {
-    let n = 0;
-    let q = 0;
-  }
-
-  def BLcc : ARC4InstBranch<0b00101,
-    (outs), (ins brtarget20:$offset, i32imm:$q),
-    "bl\t$offset", []> {
-    let n = 0;
-  }
+    (outs), (ins brtarget20:$offset, i32imm:$q, i32imm:$n),
+    "bl\t$offset", []>;
 }
 
 let hasSideEffects = 1 in {
   def LP_insn : ARC4InstBranch<0b00110,
-    (outs), (ins brtarget20:$offset),
-    "lp\t$offset", []> {
-    let n = 0;
-    let q = 0;
-  }
-
-  def LP_cc : ARC4InstBranch<0b00110,
-    (outs), (ins brtarget20:$offset, i32imm:$q),
-    "lp\t$offset", []> {
-    let n = 0;
-  }
+    (outs), (ins brtarget20:$offset, i32imm:$q, i32imm:$n),
+    "lp\t$offset", []>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -280,34 +257,22 @@ let hasSideEffects = 1 in {
 
 let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
   def J_r : ARC4InstJumpReg<0,
-    (outs), (ins GPR32:$b),
-    "j\t$b", []> {
-    let n = 0;
-    let q = 0;
-  }
+    (outs), (ins GPR32:$b, i32imm:$f, i32imm:$q, i32imm:$n),
+    "j\t$b", []>;
 
   def J_l : ARC4InstJumpLimm<0,
-    (outs), (ins limm32:$target),
-    "j\t$target", []> {
-    let n = 0;
-    let q = 0;
-  }
+    (outs), (ins limm32:$target, i32imm:$f, i32imm:$q, i32imm:$n),
+    "j\t$target", []>;
 }
 
 let isCall = 1 in {
   def JL_r : ARC4InstJumpReg<1,
-    (outs), (ins GPR32:$b),
-    "jl\t$b", []> {
-    let n = 0;
-    let q = 0;
-  }
+    (outs), (ins GPR32:$b, i32imm:$f, i32imm:$q, i32imm:$n),
+    "jl\t$b", []>;
 
   def JL_l : ARC4InstJumpLimm<1,
-    (outs), (ins limm32:$target),
-    "jl\t$target", []> {
-    let n = 0;
-    let q = 0;
-  }
+    (outs), (ins limm32:$target, i32imm:$f, i32imm:$q, i32imm:$n),
+    "jl\t$target", []>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -469,7 +434,7 @@ defm STW : StoreAll<"stw", 0b10>;  // halfword
 
 let hasSideEffects = 1 in {
   def FLAG_r : ARC4InstFlag_r<
-    (outs), (ins GPR32:$b),
+    (outs), (ins GPR32:$b, i32imm:$q),
     "flag\t$b", []>;
 
   def FLAG_s : ARC4InstFlag_s<
@@ -477,7 +442,7 @@ let hasSideEffects = 1 in {
     "flag\t$shimm", []>;
 
   def FLAG_l : ARC4InstFlag_l<
-    (outs), (ins limm32:$limm),
+    (outs), (ins limm32:$limm, i32imm:$q),
     "flag\t$limm", []>;
 }
 
@@ -504,21 +469,21 @@ let hasSideEffects = 1 in {
 //===----------------------------------------------------------------------===//
 
 // mov a, b => and a, b, b
-def : InstAlias<"mov\t$a, $b", (AND_rrr GPR32:$a, GPR32:$b, GPR32:$b)>;
+def : InstAlias<"mov\t$a, $b", (AND_rrr GPR32:$a, GPR32:$b, GPR32:$b, 0, 0)>;
 
 // mov a, shimm => and a, shimm, shimm  (rss form: both B and C are shimm sentinel)
-def : InstAlias<"mov\t$a, $shimm", (AND_rss GPR32:$a, simm9:$shimm)>;
+def : InstAlias<"mov\t$a, $shimm", (AND_rss GPR32:$a, simm9:$shimm, 0)>;
 
 // asl as add alias (asl a, b => add a, b, b)
-def : InstAlias<"asl\t$a, $b, $c", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$c)>;
-def : InstAlias<"lsl\t$a, $b, $c", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$c)>;
+def : InstAlias<"asl\t$a, $b, $c", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$c, 0, 0)>;
+def : InstAlias<"lsl\t$a, $b, $c", (ADD_rrr GPR32:$a, GPR32:$b, GPR32:$c, 0, 0)>;
 
 // rlc a, b => adc a, b, b  (rotate left through carry)
-def : InstAlias<"rlc\t$a, $b", (ADC_rrr GPR32:$a, GPR32:$b, GPR32:$b)>;
+def : InstAlias<"rlc\t$a, $b", (ADC_rrr GPR32:$a, GPR32:$b, GPR32:$b, 0, 0)>;
 
 // j [reg] / jl [reg] — bracket syntax for jump through register
-def : InstAlias<"j\t[$b]", (J_r GPR32:$b)>;
-def : InstAlias<"jl\t[$b]", (JL_r GPR32:$b)>;
+def : InstAlias<"j\t[$b]", (J_r GPR32:$b, 0, 0, 0)>;
+def : InstAlias<"jl\t[$b]", (JL_r GPR32:$b, 0, 0, 0)>;
 
 // ld a, [b] => ld a, [b, 0]  — single-register load with implicit 0 offset
 def : InstAlias<"ld\t$a, [$b]", (LD_rs GPR32:$a, GPR32:$b, 0)>;
@@ -541,24 +506,24 @@ def : InstAlias<"stw\t$c, [$addr]", (STW_rls GPR32:$c, limm32:$addr, 0), 0>;
 // in AsmString). The parser detects "op reg, imm, imm" with equal imms and
 // collapses to "op reg, imm"; these aliases let the matcher find the rss def.
 // Priority 0 = never used for printing (the instruction's own AsmString handles that).
-def : InstAlias<"add\t$a, $shimm", (ADD_rss GPR32:$a, simm9:$shimm), 0>;
-def : InstAlias<"adc\t$a, $shimm", (ADC_rss GPR32:$a, simm9:$shimm), 0>;
-def : InstAlias<"sub\t$a, $shimm", (SUB_rss GPR32:$a, simm9:$shimm), 0>;
-def : InstAlias<"sbc\t$a, $shimm", (SBC_rss GPR32:$a, simm9:$shimm), 0>;
-def : InstAlias<"and\t$a, $shimm", (AND_rss GPR32:$a, simm9:$shimm), 0>;
-def : InstAlias<"or\t$a, $shimm",  (OR_rss  GPR32:$a, simm9:$shimm), 0>;
-def : InstAlias<"bic\t$a, $shimm", (BIC_rss GPR32:$a, simm9:$shimm), 0>;
-def : InstAlias<"xor\t$a, $shimm", (XOR_rss GPR32:$a, simm9:$shimm), 0>;
+def : InstAlias<"add\t$a, $shimm", (ADD_rss GPR32:$a, simm9:$shimm, 0), 0>;
+def : InstAlias<"adc\t$a, $shimm", (ADC_rss GPR32:$a, simm9:$shimm, 0), 0>;
+def : InstAlias<"sub\t$a, $shimm", (SUB_rss GPR32:$a, simm9:$shimm, 0), 0>;
+def : InstAlias<"sbc\t$a, $shimm", (SBC_rss GPR32:$a, simm9:$shimm, 0), 0>;
+def : InstAlias<"and\t$a, $shimm", (AND_rss GPR32:$a, simm9:$shimm, 0), 0>;
+def : InstAlias<"or\t$a, $shimm",  (OR_rss  GPR32:$a, simm9:$shimm, 0), 0>;
+def : InstAlias<"bic\t$a, $shimm", (BIC_rss GPR32:$a, simm9:$shimm, 0), 0>;
+def : InstAlias<"xor\t$a, $shimm", (XOR_rss GPR32:$a, simm9:$shimm, 0), 0>;
 
 // Hidden 0ss aliases: discard + shimm+shimm form (after parser collapses
 // duplicate imms AND converts leading 0 to a token).
 // "add 0, 5, 5" -> parser collapses to [add, 0(token), 5(imm)] -> 0ss.
-def : InstAlias<"add\t0, $shimm", (ADD_0ss simm9:$shimm), 0>;
-def : InstAlias<"adc\t0, $shimm", (ADC_0ss simm9:$shimm), 0>;
-def : InstAlias<"sub\t0, $shimm", (SUB_0ss simm9:$shimm), 0>;
-def : InstAlias<"sbc\t0, $shimm", (SBC_0ss simm9:$shimm), 0>;
-def : InstAlias<"and\t0, $shimm", (AND_0ss simm9:$shimm), 0>;
-def : InstAlias<"or\t0, $shimm",  (OR_0ss  simm9:$shimm), 0>;
-def : InstAlias<"bic\t0, $shimm", (BIC_0ss simm9:$shimm), 0>;
-def : InstAlias<"xor\t0, $shimm", (XOR_0ss simm9:$shimm), 0>;
+def : InstAlias<"add\t0, $shimm", (ADD_0ss simm9:$shimm, 0), 0>;
+def : InstAlias<"adc\t0, $shimm", (ADC_0ss simm9:$shimm, 0), 0>;
+def : InstAlias<"sub\t0, $shimm", (SUB_0ss simm9:$shimm, 0), 0>;
+def : InstAlias<"sbc\t0, $shimm", (SBC_0ss simm9:$shimm, 0), 0>;
+def : InstAlias<"and\t0, $shimm", (AND_0ss simm9:$shimm, 0), 0>;
+def : InstAlias<"or\t0, $shimm",  (OR_0ss  simm9:$shimm, 0), 0>;
+def : InstAlias<"bic\t0, $shimm", (BIC_0ss simm9:$shimm, 0), 0>;
+def : InstAlias<"xor\t0, $shimm", (XOR_0ss simm9:$shimm, 0), 0>;
 

@@ -29,6 +29,10 @@ void ARC4InstPrinter::printRegName(raw_ostream &O, MCRegister Reg) {
 void ARC4InstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                 StringRef Annot, const MCSubtargetInfo &STI,
                                 raw_ostream &O) {
+  // Suffix operands (f, q, n) are real MCInst operands but are NOT referenced
+  // in AsmString, so printInstruction/printAliasInstr won't print them.
+  // Suffix printing will be added in a follow-up patch; for now the output
+  // matches the pre-refactor behavior (no suffix in printed output).
   if (!printAliasInstr(MI, Address, O))
     printInstruction(MI, Address, O);
   printAnnotation(O, Annot);

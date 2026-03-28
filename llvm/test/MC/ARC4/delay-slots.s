@@ -29,7 +29,7 @@ bl.nd 100
 
 ; CHECK: j	r5                      ; encoding: [0x20,0x80,0x02,0x38]
 j.d [r5]
-; CHECK: j	r5                      ; encoding: [0x00,0x80,0x02,0x38]
+; CHECK: j	[r5]                    ; encoding: [0x00,0x80,0x02,0x38]
 j.nd [r5]
 ; CHECK: j	r5                      ; encoding: [0x40,0x80,0x02,0x38]
 j.jd [r5]
@@ -40,7 +40,7 @@ j.jd [r5]
 
 ; CHECK: jl	r5                      ; encoding: [0x20,0x82,0x02,0x38]
 jl.d [r5]
-; CHECK: jl	r5                      ; encoding: [0x00,0x82,0x02,0x38]
+; CHECK: jl	[r5]                    ; encoding: [0x00,0x82,0x02,0x38]
 jl.nd [r5]
 ; CHECK: jl	r5                      ; encoding: [0x40,0x82,0x02,0x38]
 jl.jd [r5]
