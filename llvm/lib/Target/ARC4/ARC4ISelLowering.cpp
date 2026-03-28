@@ -16,6 +16,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/RuntimeLibcallUtil.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/Support/Debug.h"
@@ -130,6 +131,36 @@ ARC4TargetLowering::ARC4TargetLowering(const TargetMachine &TM,
   // GlobalAddress — custom lower so legalize doesn't try to expand it.
   setOperationAction(ISD::GlobalAddress, MVT::i32, Custom);
 
+  // Sign-extend-in-register: ARC4 has sexb (byte) and sexw (halfword).
+  setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i8, Legal);
+  setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i16, Legal);
+  setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i1, Expand);
+
+  // Sub-word loads: mark extending loads as Legal — we provide LDB/LDW
+  // patterns for zextload, sextload, and extload.
+  for (MVT VT : {MVT::i8, MVT::i16}) {
+    setLoadExtAction(ISD::EXTLOAD, MVT::i32, VT, Legal);
+    setLoadExtAction(ISD::ZEXTLOAD, MVT::i32, VT, Legal);
+    setLoadExtAction(ISD::SEXTLOAD, MVT::i32, VT, Legal);
+  }
+
+  // Sub-word stores: truncating stores are legal (stb/stw).
+  setTruncStoreAction(MVT::i32, MVT::i8, Legal);
+  setTruncStoreAction(MVT::i32, MVT::i16, Legal);
+
+  // Shifts: ARC4 base ISA only has single-bit shifts (asl/asr/lsr).
+  // Use Custom lowering to emit a loop of single-bit shifts.
+  setOperationAction(ISD::SHL, MVT::i32, Custom);
+  setOperationAction(ISD::SRA, MVT::i32, Custom);
+  setOperationAction(ISD::SRL, MVT::i32, Custom);
+
+  // Multiply: no hardware multiplier in base ARC4. Use libcall (__mulsi3).
+  setOperationAction(ISD::MUL, MVT::i32, LibCall);
+  setOperationAction(ISD::MULHS, MVT::i32, Expand);
+  setOperationAction(ISD::MULHU, MVT::i32, Expand);
+  setOperationAction(ISD::SMUL_LOHI, MVT::i32, Expand);
+  setOperationAction(ISD::UMUL_LOHI, MVT::i32, Expand);
+
   setMaxAtomicSizeInBitsSupported(0);
 }
 
@@ -152,6 +183,10 @@ SDValue ARC4TargetLowering::LowerOperation(SDValue Op,
     // For now, just materialize with an AND_rrl (mov from limm).
     return Addr;
   }
+  case ISD::SHL:
+  case ISD::SRA:
+  case ISD::SRL:
+    return LowerShift(Op, DAG);
   default:
     llvm_unreachable("unimplemented operation lowering");
   }
@@ -194,6 +229,35 @@ SDValue ARC4TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
 
   return DAG.getNode(ARC4ISD::BRcc, dl, MVT::Other, Chain, Dest, LHS, RHS,
                      DAG.getConstant(ArcCC, dl, MVT::i32));
+}
+
+//===----------------------------------------------------------------------===//
+//  Shift lowering — expand to libcall (__ashlsi3, __ashrsi3, __lshrsi3)
+//===----------------------------------------------------------------------===//
+
+SDValue ARC4TargetLowering::LowerShift(SDValue Op, SelectionDAG &DAG) const {
+  EVT VT = Op.getValueType();
+  SDLoc DL(Op);
+  SDValue LHS = Op.getOperand(0);
+  SDValue RHS = Op.getOperand(1);
+
+  RTLIB::Libcall LC;
+  switch (Op.getOpcode()) {
+  case ISD::SHL:
+    LC = RTLIB::getSHL(VT);
+    break;
+  case ISD::SRA:
+    LC = RTLIB::getSRA(VT);
+    break;
+  case ISD::SRL:
+    LC = RTLIB::getSRL(VT);
+    break;
+  default:
+    llvm_unreachable("unexpected shift opcode");
+  }
+
+  TargetLowering::MakeLibCallOptions CallOptions;
+  return makeLibCall(DAG, LC, VT, {LHS, RHS}, CallOptions, DL).first;
 }
 
 //===----------------------------------------------------------------------===//

@@ -1,10 +1,10 @@
-; RUN: not llc -march=arc4 < %s 2>&1 | FileCheck %s
-; XFAIL: *
+; RUN: llc -march=arc4 < %s -filetype=asm -o - | FileCheck %s
 
-; TODO: Negative constants crash with APInt assertion.
-; The shimm constant materialization doesn't handle negative values correctly.
+; Negative constants should be materialized using shimm (mov alias).
 
-; CHECK: Assertion
+; CHECK-LABEL: neg1:
+; CHECK: mov r0, -1
+; CHECK: j [blink]
 define i32 @neg1() {
   ret i32 -1
 }

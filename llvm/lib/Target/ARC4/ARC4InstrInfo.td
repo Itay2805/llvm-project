@@ -609,6 +609,44 @@ def : Pat<(i32 (load GPR32:$addr)),
 def : Pat<(store i32:$val, GPR32:$addr),
           (ST_rrs GPR32:$val, GPR32:$addr, 0, 0, 0)>;
 
+// Byte load (zero-extending): ldb a, [b, 0] — X=0, W=0, E=0
+def : Pat<(i32 (zextloadi8 GPR32:$addr)),
+          (LDB_rs GPR32:$addr, 0, 0, 0, 0)>;
+def : Pat<(i32 (extloadi8 GPR32:$addr)),
+          (LDB_rs GPR32:$addr, 0, 0, 0, 0)>;
+
+// Byte load (sign-extending): ldb a, [b, 0] with X=1 (sign-extend)
+def : Pat<(i32 (sextloadi8 GPR32:$addr)),
+          (LDB_rs GPR32:$addr, 0, 1, 0, 0)>;
+
+// Halfword load (zero-extending): ldw a, [b, 0] — X=0, W=0, E=0
+def : Pat<(i32 (zextloadi16 GPR32:$addr)),
+          (LDW_rs GPR32:$addr, 0, 0, 0, 0)>;
+def : Pat<(i32 (extloadi16 GPR32:$addr)),
+          (LDW_rs GPR32:$addr, 0, 0, 0, 0)>;
+
+// Halfword load (sign-extending): ldw a, [b, 0] with X=1 (sign-extend)
+def : Pat<(i32 (sextloadi16 GPR32:$addr)),
+          (LDW_rs GPR32:$addr, 0, 1, 0, 0)>;
+
+// Byte store (truncating): stb c, [b, 0] — v=0, D=0
+def : Pat<(truncstorei8 i32:$val, GPR32:$addr),
+          (STB_rrs GPR32:$val, GPR32:$addr, 0, 0, 0)>;
+
+// Halfword store (truncating): stw c, [b, 0] — v=0, D=0
+def : Pat<(truncstorei16 i32:$val, GPR32:$addr),
+          (STW_rrs GPR32:$val, GPR32:$addr, 0, 0, 0)>;
+
+//===----------------------------------------------------------------------===//
+// DAG Selection Patterns — Sign-Extend In-Register
+//
+// sexb: sign-extend byte (bits 7:0 -> 31:0)
+// sexw: sign-extend halfword (bits 15:0 -> 31:0)
+//===----------------------------------------------------------------------===//
+
+def : Pat<(sext_inreg i32:$src, i8),  (SEXB_rr GPR32:$src, 0, 0)>;
+def : Pat<(sext_inreg i32:$src, i16), (SEXW_rr GPR32:$src, 0, 0)>;
+
 //===----------------------------------------------------------------------===//
 // Pseudo Instructions — Call Sequence Markers
 //===----------------------------------------------------------------------===//

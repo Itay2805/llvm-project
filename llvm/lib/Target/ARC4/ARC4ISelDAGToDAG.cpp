@@ -56,23 +56,48 @@ FunctionPass *llvm::createARC4ISelDag(ARC4TargetMachine &TM,
 }
 
 void ARC4DAGToDAGISel::Select(SDNode *N) {
+  SDLoc DL(N);
   switch (N->getOpcode()) {
   case ISD::Constant: {
     int64_t CVal = cast<ConstantSDNode>(N)->getSExtValue();
+    // Truncate to 32-bit unsigned for encoding. This avoids an APInt assertion
+    // when the sign-extended value (e.g. -1 = 0xFFFFFFFFFFFFFFFF) doesn't fit
+    // in an unsigned 32-bit APInt.
+    uint32_t CVal32 = static_cast<uint32_t>(CVal);
     // simm9: -256..255 => AND_rss (mov alias): and a, shimm, shimm
     if (CVal >= -256 && CVal <= 255) {
       ReplaceNode(
           N, CurDAG->getMachineNode(
-                 ARC4::AND_rss, SDLoc(N), MVT::i32,
-                 CurDAG->getTargetConstant(CVal, SDLoc(N), MVT::i32),
-                 CurDAG->getTargetConstant(0, SDLoc(N), MVT::i32))); // f=0
+                 ARC4::AND_rss, DL, MVT::i32,
+                 CurDAG->getTargetConstant(CVal32, DL, MVT::i32),
+                 CurDAG->getTargetConstant(0, DL, MVT::i32))); // f=0
       return;
     }
-    // Larger constants: use limm form (AND_rrl with limm)
-    // For now, just use AND_rrl with b=SHIMM(63)=shimm=0 and limm
-    // Actually, let's just use ADD_rrl with b=0 for large constants
-    // TODO: proper constant materialization
-    llvm_unreachable("Constants outside simm9 range not yet supported");
+    // Larger constants: emit two instructions to materialize an arbitrary i32:
+    //   mov dest, 0       (and dest, 0, 0 — shimm form)
+    //   or  dest, dest, limm  (or dest, dest, limm — rrl form)
+    SDNode *ZeroNode = CurDAG->getMachineNode(
+        ARC4::AND_rss, DL, MVT::i32,
+        CurDAG->getTargetConstant(0, DL, MVT::i32),
+        CurDAG->getTargetConstant(0, DL, MVT::i32));
+    SDValue OrOps[] = {
+        SDValue(ZeroNode, 0),
+        CurDAG->getTargetConstant(CVal32, DL, MVT::i32),
+        CurDAG->getTargetConstant(0, DL, MVT::i32), // f=0
+        CurDAG->getTargetConstant(0, DL, MVT::i32), // q=0
+    };
+    ReplaceNode(N, CurDAG->getMachineNode(ARC4::OR_rrl, DL, MVT::i32, OrOps));
+    return;
+  }
+  case ISD::FrameIndex: {
+    int FI = cast<FrameIndexSDNode>(N)->getIndex();
+    SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i32);
+    SDValue Imm0 = CurDAG->getTargetConstant(0, DL, MVT::i32);
+    // Materialize as ADD_rrs: add dst, frameindex, 0
+    // The frame index will be resolved by eliminateFrameIndex to SP/FP + offset.
+    ReplaceNode(N, CurDAG->getMachineNode(ARC4::ADD_rrs, DL, MVT::i32,
+                                          TFI, Imm0, Imm0));
+    return;
   }
   }
   SelectCode(N);

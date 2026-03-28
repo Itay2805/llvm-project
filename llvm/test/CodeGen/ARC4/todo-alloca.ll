@@ -1,10 +1,13 @@
-; RUN: not llc -march=arc4 < %s 2>&1 | FileCheck %s
-; XFAIL: *
+; RUN: llc -march=arc4 < %s -filetype=asm -o - | FileCheck %s
 
-; TODO: Stack-allocated local variables (alloca) not yet implemented.
-; Needs FrameIndex selection in ISelDAGToDAG.
+; Stack-allocated local variables (alloca) use FrameIndex selection.
 
-; CHECK: Cannot select
+; CHECK-LABEL: local_var:
+; CHECK: sub sp, sp,
+; CHECK: mov r0, 42
+; CHECK: st r0,
+; CHECK: add sp, sp,
+; CHECK: j [blink]
 define i32 @local_var() {
   %p = alloca i32
   store i32 42, ptr %p

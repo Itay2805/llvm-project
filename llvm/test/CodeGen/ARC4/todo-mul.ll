@@ -1,9 +1,9 @@
-; RUN: not llc -march=arc4 < %s 2>&1 | FileCheck %s
+; RUN: llc -march=arc4 < %s -filetype=asm -o - | FileCheck %s
 
-; TODO: Multiply not available on base ARC4 (no hardware multiplier).
-; Needs libcall expansion or mul64 extension.
+; Multiply expands to libcall since base ARC4 has no hardware multiplier.
 
-; CHECK: no libcall available for mul
+; CHECK-LABEL: mul:
+; CHECK: bl __mulsi3
 define i32 @mul(i32 %a, i32 %b) {
   %c = mul i32 %a, %b
   ret i32 %c

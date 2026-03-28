@@ -1,11 +1,10 @@
-; RUN: not llc -march=arc4 < %s 2>&1 | FileCheck %s
-; XFAIL: *
+; RUN: llc -march=arc4 < %s -filetype=asm -o - | FileCheck %s
 
-; TODO: Shift operations not yet implemented.
-; ARC4 base ISA has single-bit shifts (asl/asr/lsr).
-; Multi-bit shifts need barrel shifter extension or expansion.
+; Shift operations expand to libcalls since ARC4 base ISA lacks
+; a barrel shifter.
 
-; CHECK: Unable to legalize non-vector shift
+; CHECK-LABEL: shl:
+; CHECK: bl __ashlsi3
 define i32 @shl(i32 %a, i32 %b) {
   %c = shl i32 %a, %b
   ret i32 %c

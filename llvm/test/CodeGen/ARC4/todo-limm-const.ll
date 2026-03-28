@@ -1,10 +1,11 @@
-; RUN: not llc -march=arc4 < %s 2>&1 | FileCheck %s
-; XFAIL: *
+; RUN: llc -march=arc4 < %s -filetype=asm -o - | FileCheck %s
 
-; TODO: Large constants (outside shimm9 range) not yet implemented.
-; Needs limm materialization pattern.
+; Large constants (outside shimm9 range) use limm materialization.
 
-; CHECK: Constants outside simm9 range not yet supported
+; CHECK-LABEL: big_const:
+; CHECK: mov r{{[0-9]+}}, 0
+; CHECK: or r0, r{{[0-9]+}}, 100000
+; CHECK: j [blink]
 define i32 @big_const() {
   ret i32 100000
 }
