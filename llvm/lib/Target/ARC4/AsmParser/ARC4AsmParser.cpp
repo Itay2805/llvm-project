@@ -201,6 +201,29 @@ bool ARC4AsmParser::parseOperand(OperandVector &Operands) {
       getParser().Lex(); // eat ','
       if (parseRegOrImm(Operands))
         return true;
+    } else {
+      // Single operand: [addr] with immediate base.
+      // For stores, add an explicit zero offset so the matcher uses the
+      // limm form (st r0, [limm, 0]) instead of the shimm+shimm form
+      // (which would double the address: shimm+shimm = 2*shimm).
+      // For loads, LD_l already handles [limm] as a single operand.
+      auto *BaseOp = static_cast<ARC4Operand *>(Operands.back().get());
+      // For stores with immediate base [imm] and REGISTER value, add a zero
+      // offset so the matcher uses the limm form (ST_rls with [limm, 0])
+      // instead of the shimm+shimm form (which doubles the address).
+      // When the stored value is also an immediate (e.g., "st 5, [1000]"),
+      // DON'T add the offset — let tryMatchStoreSRS handle the limm adjustment.
+      // For loads, this is handled by the LD_ss → LD_l redirect in
+      // matchAndEmitInstruction.
+      StringRef Mn = static_cast<ARC4Operand *>(Operands[0].get())->getToken();
+      bool IsStore = (Mn == "st" || Mn == "stb" || Mn == "stw");
+      bool ValueIsReg = (Operands.size() >= 2 &&
+                         static_cast<ARC4Operand *>(Operands[1].get())->isReg());
+      if (IsStore && BaseOp->isImm() && ValueIsReg) {
+        SMLoc Loc = getLexer().getLoc();
+        const MCExpr *Zero = MCConstantExpr::create(0, getContext());
+        Operands.push_back(ARC4Operand::createImm(Zero, Loc, Loc));
+      }
     }
 
     if (getLexer().isNot(AsmToken::RBrac))
@@ -451,7 +474,9 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
   // shimm-sized -> st ?, [imm].  Matches ST_rss via existing AsmMatcher entry.
   StringRef MnBase = static_cast<ARC4Operand *>(Operands[0].get())->getToken();
   bool IsStore = (MnBase == "st" || MnBase == "stb" || MnBase == "stw");
+  bool IsLoad = (MnBase == "ld" || MnBase == "ldb" || MnBase == "ldw");
 
+  // Inner bracket collapse for stores: st ?, [imm, imm] -> st ?, [imm]
   if (IsStore && Operands.size() == 6) {
     auto *O2 = static_cast<ARC4Operand *>(Operands[2].get());
     auto *O3 = static_cast<ARC4Operand *>(Operands[3].get());
@@ -467,6 +492,27 @@ bool ARC4AsmParser::parseInstruction(ParseInstructionInfo &Info, StringRef Name,
         int64_t Val = CE3->getValue();
         if (Val >= -256 && Val <= 255) {
           // Remove the second bracket imm (index 4), shifting ] down.
+          Operands.erase(Operands.begin() + 4);
+        }
+      }
+    }
+  }
+
+  // Inner bracket collapse for loads: ld reg, [imm, imm] -> ld reg, [imm]
+  // Operands: [mnemonic, reg, "[", imm, imm, "]"] = 6 items
+  if (IsLoad && Operands.size() == 6) {
+    auto *O2 = static_cast<ARC4Operand *>(Operands[2].get());
+    auto *O3 = static_cast<ARC4Operand *>(Operands[3].get());
+    auto *O4 = static_cast<ARC4Operand *>(Operands[4].get());
+    auto *O5 = static_cast<ARC4Operand *>(Operands[5].get());
+    if (O2->isToken() && O2->getToken() == "[" &&
+        O3->isImm() && O4->isImm() &&
+        O5->isToken() && O5->getToken() == "]") {
+      const auto *CE3 = dyn_cast<MCConstantExpr>(O3->Expr);
+      const auto *CE4 = dyn_cast<MCConstantExpr>(O4->Expr);
+      if (CE3 && CE4 && CE3->getValue() == CE4->getValue()) {
+        int64_t Val = CE3->getValue();
+        if (Val >= -256 && Val <= 255) {
           Operands.erase(Operands.begin() + 4);
         }
       }
@@ -766,6 +812,32 @@ bool ARC4AsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
   switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm)) {
   case Match_Success: {
+    // Fix load [imm] forms: the matcher may select LD_ss (shimm+shimm) for
+    // single-immediate brackets like "ld r0, [5]", which doubles the address
+    // (shimm base + shimm offset = 5+5 = 10). Redirect to LD_l (limm form)
+    // which correctly treats the immediate as an absolute address.
+    // Only apply when the user wrote [imm] not [imm, imm].
+    unsigned MatchedOpc = Inst.getOpcode();
+    unsigned LimmOpc = 0;
+    if (MatchedOpc == ARC4::LD_ss) LimmOpc = ARC4::LD_l;
+    else if (MatchedOpc == ARC4::LDB_ss) LimmOpc = ARC4::LDB_l;
+    else if (MatchedOpc == ARC4::LDW_ss) LimmOpc = ARC4::LDW_l;
+
+    if (LimmOpc != 0) {
+      // Check if the assembly had a single [imm] (no comma between brackets).
+      // If so, the user intended an absolute address, not shimm+shimm.
+      // We detect this by checking if there were exactly 4 tokens:
+      // [mnemonic, reg, "[", imm, "]"] = 5 operands (no second bracket operand).
+      bool SingleBracketImm = (Operands.size() == 5);
+      if (SingleBracketImm) {
+        // Redirect to LD_l: takes (GPR32 dest, limm32 addr)
+        MCInst NewInst;
+        NewInst.setOpcode(LimmOpc);
+        NewInst.addOperand(Inst.getOperand(0)); // dest register
+        NewInst.addOperand(Inst.getOperand(1)); // address (was shimm, now limm)
+        Inst = NewInst;
+      }
+    }
     // Validate suffix compatibility before filling operands.
     if (ParsedCondCode != 0 && isShimmForm(Inst.getOpcode()))
       return Error(IDLoc,

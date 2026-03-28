@@ -510,6 +510,7 @@ def : InstAlias<"ld\t$a, [$b]", (LD_rs GPR32:$a, GPR32:$b, 0)>;
 def : InstAlias<"ldb\t$a, [$b]", (LDB_rs GPR32:$a, GPR32:$b, 0)>;
 def : InstAlias<"ldw\t$a, [$b]", (LDW_rs GPR32:$a, GPR32:$b, 0)>;
 
+
 // st c, [b] => st c, [b, 0]  — single-register store with implicit 0 offset
 def : InstAlias<"st\t$c, [$b]", (ST_rrs GPR32:$c, GPR32:$b, 0)>;
 def : InstAlias<"stb\t$c, [$b]", (STB_rrs GPR32:$c, GPR32:$b, 0)>;
