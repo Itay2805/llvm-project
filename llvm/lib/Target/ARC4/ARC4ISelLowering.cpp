@@ -31,29 +31,7 @@ using namespace llvm;
 // ARC4 condition code mapping
 //===----------------------------------------------------------------------===//
 
-// ARC4 condition codes (encoded in bits [4:0] of branch/conditional instr):
-//   0 = AL (always), 1 = EQ (Z), 2 = NE (!Z), 3 = PL (P, !N),
-//   4 = MI (N), 5 = CS/HS (C), 6 = CC/LO (!C), 7 = VS (V), 8 = VC (!V),
-//   9 = GT, 10 = GE, 11 = LT, 12 = LE, 13 = HI, 14 = LS
-namespace ARC4CC {
-enum CondCode {
-  AL = 0,
-  EQ = 1,
-  NE = 2,
-  PL = 3,
-  MI = 4,
-  HS = 5,
-  LO = 6,
-  VS = 7,
-  VC = 8,
-  GT = 9,
-  GE = 10,
-  LT = 11,
-  LE = 12,
-  HI = 13,
-  LS = 14
-};
-} // namespace ARC4CC
+// ARC4CC::CondCode is defined in ARC4.h
 
 static ARC4CC::CondCode getARC4CC(ISD::CondCode CC) {
   switch (CC) {

@@ -68,6 +68,176 @@ void ARC4InstrInfo::storeRegToStackSlot(
       .addMemOperand(MMO);
 }
 
+// === Branch analysis helpers ===
+
+static bool isUncondBranch(const MachineInstr &MI) {
+  // B with q=0 (always) is unconditional
+  if (MI.getOpcode() == ARC4::B) {
+    // q operand is the second operand (offset, q, n)
+    return MI.getOperand(1).getImm() == 0; // q == AL (always)
+  }
+  return false;
+}
+
+static bool isCondBranch(const MachineInstr &MI) {
+  // BRcc_rr is always conditional
+  if (MI.getOpcode() == ARC4::BRcc_rr)
+    return true;
+  // B with q != 0 is conditional
+  if (MI.getOpcode() == ARC4::B)
+    return MI.getOperand(1).getImm() != 0;
+  return false;
+}
+
+bool ARC4InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
+                                  MachineBasicBlock *&TBB,
+                                  MachineBasicBlock *&FBB,
+                                  SmallVectorImpl<MachineOperand> &Cond,
+                                  bool AllowModify) const {
+  TBB = FBB = nullptr;
+  MachineBasicBlock::iterator I = MBB.getLastNonDebugInstr();
+  if (I == MBB.end())
+    return false;
+
+  // Walk backwards through terminators.
+  while (I->isTerminator()) {
+    if (I->isDebugInstr()) {
+      if (I == MBB.begin())
+        return false;
+      --I;
+      continue;
+    }
+
+    if (I->getOpcode() == ARC4::RET || I->isReturn()) {
+      // Return — can't analyze further.
+      return true;
+    }
+
+    if (I->getOpcode() == ARC4::J_r || I->getOpcode() == ARC4::JL_r) {
+      // Indirect branch/call — can't analyze.
+      return true;
+    }
+
+    if (isUncondBranch(*I)) {
+      // Unconditional branch.
+      if (!AllowModify) {
+        TBB = I->getOperand(0).getMBB();
+        return false;
+      }
+      // If preceded by conditional branch, this is the fallthrough.
+      // Delete any code after this.
+      MachineBasicBlock::iterator Next = std::next(I);
+      while (Next != MBB.end()) {
+        MachineInstr &Dead = *Next;
+        ++Next;
+        Dead.eraseFromParent();
+      }
+      Cond.clear();
+      FBB = nullptr;
+      TBB = I->getOperand(0).getMBB();
+
+      // If this is the only terminator, we're done.
+      if (I == MBB.begin())
+        return false;
+      --I;
+      if (!isCondBranch(*I)) {
+        return false;
+      }
+      // Fall through to conditional branch handling.
+    }
+
+    if (I->getOpcode() == ARC4::BRcc_rr) {
+      // Conditional branch: BRcc_rr target, lhs, rhs, cc
+      if (!Cond.empty())
+        return true; // Multiple conditional branches — bail.
+      FBB = TBB;     // Previous uncond target becomes false branch.
+      TBB = I->getOperand(0).getMBB();
+      Cond.push_back(I->getOperand(1)); // lhs
+      Cond.push_back(I->getOperand(2)); // rhs
+      Cond.push_back(I->getOperand(3)); // cc
+      if (I == MBB.begin())
+        return false;
+      --I;
+      continue;
+    }
+
+    if (I->getOpcode() == ARC4::B && I->getOperand(1).getImm() != 0) {
+      // Conditional B with condition code in q operand.
+      // This shouldn't normally appear (we use BRcc_rr), but handle it.
+      return true; // Can't analyze directly.
+    }
+
+    // Unknown terminator.
+    return true;
+  }
+
+  return false;
+}
+
+unsigned ARC4InstrInfo::insertBranch(MachineBasicBlock &MBB,
+                                     MachineBasicBlock *TBB,
+                                     MachineBasicBlock *FBB,
+                                     ArrayRef<MachineOperand> Cond,
+                                     const DebugLoc &DL,
+                                     int *BytesAdded) const {
+  assert(!BytesAdded && "Code size not handled.");
+  assert(TBB && "insertBranch must not be told to insert a fallthrough.");
+
+  if (Cond.empty()) {
+    // Unconditional branch: B target, q=0(al), n=0(nd)
+    BuildMI(&MBB, DL, get(ARC4::B)).addMBB(TBB).addImm(0).addImm(0);
+    return 1;
+  }
+
+  // Conditional branch: BRcc_rr target, lhs, rhs, cc
+  assert(Cond.size() == 3 && "ARC4 branch condition has 3 components.");
+  MachineInstrBuilder MIB = BuildMI(&MBB, DL, get(ARC4::BRcc_rr));
+  MIB.addMBB(TBB);
+  MIB.add(Cond[0]); // lhs
+  MIB.add(Cond[1]); // rhs
+  MIB.add(Cond[2]); // cc
+
+  if (!FBB)
+    return 1;
+
+  // Two-way: conditional + unconditional fallthrough
+  BuildMI(&MBB, DL, get(ARC4::B)).addMBB(FBB).addImm(0).addImm(0);
+  return 2;
+}
+
+unsigned ARC4InstrInfo::removeBranch(MachineBasicBlock &MBB,
+                                     int *BytesRemoved) const {
+  assert(!BytesRemoved && "Code size not handled.");
+  MachineBasicBlock::iterator I = MBB.getLastNonDebugInstr();
+  if (I == MBB.end())
+    return 0;
+
+  if (!isUncondBranch(*I) && !isCondBranch(*I))
+    return 0;
+
+  I->eraseFromParent();
+
+  I = MBB.getLastNonDebugInstr();
+  if (I == MBB.end())
+    return 1;
+
+  if (!isCondBranch(*I))
+    return 1;
+
+  I->eraseFromParent();
+  return 2;
+}
+
+bool ARC4InstrInfo::reverseBranchCondition(
+    SmallVectorImpl<MachineOperand> &Cond) const {
+  assert(Cond.size() == 3 && "Invalid ARC4 branch condition.");
+  auto CC = static_cast<ARC4CC::CondCode>(Cond[2].getImm());
+  Cond[2].setImm(ARC4CC::getOppositeBranchCondition(CC));
+  return false;
+}
+
+// === Stack slot operations ===
+
 void ARC4InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator I,
                                          Register DestReg, int FrameIndex,

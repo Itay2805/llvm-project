@@ -28,6 +28,47 @@ FunctionPass *createARC4ISelDag(ARC4TargetMachine &TM,
 void initializeARC4AsmPrinterPass(PassRegistry &);
 void initializeARC4DAGToDAGISelLegacyPass(PassRegistry &);
 
+namespace ARC4CC {
+enum CondCode {
+  AL = 0,
+  EQ = 1,
+  NE = 2,
+  PL = 3,
+  MI = 4,
+  HS = 5,
+  LO = 6,
+  VS = 7,
+  VC = 8,
+  GT = 9,
+  GE = 10,
+  LT = 11,
+  LE = 12,
+  HI = 13,
+  LS = 14,
+  PNZ = 15
+};
+
+inline CondCode getOppositeBranchCondition(CondCode CC) {
+  switch (CC) {
+  case EQ: return NE;
+  case NE: return EQ;
+  case GT: return LE;
+  case GE: return LT;
+  case LT: return GE;
+  case LE: return GT;
+  case HI: return LS;
+  case LS: return HI;
+  case HS: return LO;
+  case LO: return HS;
+  case PL: return MI;
+  case MI: return PL;
+  case VS: return VC;
+  case VC: return VS;
+  default: llvm_unreachable("Unknown condition code");
+  }
+}
+} // namespace ARC4CC
+
 } // namespace llvm
 
 #endif // LLVM_LIB_TARGET_ARC4_ARC4_H
