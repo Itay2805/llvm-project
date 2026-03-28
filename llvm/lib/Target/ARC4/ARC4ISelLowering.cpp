@@ -301,7 +301,7 @@ ARC4TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     }
 
     // b<inv_cc> sinkMBB
-    BuildMI(ThisMBB, DL, TII->get(ARC4::B))
+    BuildMI(ThisMBB, DL, TII->get(ARC4::Bcc))
         .addMBB(SinkMBB)
         .addImm(InvCC) // q = inverted condition
         .addImm(0);    // n = no nullify

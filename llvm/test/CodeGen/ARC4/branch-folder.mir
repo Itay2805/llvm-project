@@ -1,0 +1,212 @@
+# RUN: llc -mtriple=arc4 --run-pass=branch-folder %s -o - | FileCheck %s
+
+# Test that the branch analyzer correctly handles various branch patterns.
+# These tests exercise analyzeBranch, removeBranch, insertBranch, and
+# reverseBranchCondition through the branch-folder pass.
+
+---
+# Test 1: Conditional + unconditional branch pair. The branch folder must
+# correctly identify bb.0 as having a two-way branch (BRcc_rr + B) so it
+# can remove the redundant unconditional B to the fallthrough in bb.0.
+# With the old buggy analyzeBranch (AllowModify=false), the cond+uncond pair
+# was misidentified as just an unconditional branch.
+name:            cond_uncond_pair
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  ; CHECK-LABEL: name: cond_uncond_pair
+  ;
+  ; bb.0 should have the conditional branch but NOT the unconditional B to
+  ; the fallthrough successor bb.1 (the branch folder removes it).
+  ; CHECK:      bb.0:
+  ; CHECK:        BRcc_rr %bb.2, $r0, $r1, 12
+  ; CHECK-NOT:    B %bb
+  ; CHECK:      bb.1:
+  ; CHECK:        $r0 = ADD_rrr
+  ; CHECK:        B %bb.3
+  ; CHECK:      bb.2:
+  ; CHECK:        $r0 = ADD_rrr
+  ; CHECK:      bb.3:
+  ; CHECK:        RET
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r0, $r1
+
+    BRcc_rr %bb.2, $r0, $r1, 12
+    B %bb.1, 0, 0, implicit $status32
+
+  bb.1:
+    successors: %bb.3(0x80000000)
+    liveins: $r0
+
+    $r2 = AND_rss 1, 0
+    $r0 = ADD_rrr killed $r0, killed $r2, 0, 0
+    B %bb.3, 0, 0, implicit $status32
+
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $r1
+
+    $r2 = AND_rss 1, 0
+    $r0 = ADD_rrr killed $r1, killed $r2, 0, 0
+
+  bb.3:
+    liveins: $r0
+
+    RET implicit $blink, implicit $r0
+...
+---
+# Test 2: Empty block elimination. bb.1 is an empty block that just
+# unconditionally branches to bb.2. The branch folder should remove it
+# and redirect bb.0's conditional branch, collapsing into a single block.
+name:            empty_block_elim
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  ; CHECK-LABEL: name: empty_block_elim
+  ; Both branches go to the same destination after folding, so the
+  ; conditional branch and the empty block should both be eliminated.
+  ; CHECK:      bb.0:
+  ; CHECK-NOT:    BRcc_rr
+  ; CHECK-NOT:    B %bb
+  ; CHECK:        $r0 = AND_rss 42, 0
+  ; CHECK:        RET
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r0, $r1
+
+    BRcc_rr %bb.1, $r0, $r1, 1
+    B %bb.2, 0, 0, implicit $status32
+
+  bb.1:
+    successors: %bb.2(0x80000000)
+
+    B %bb.2, 0, 0, implicit $status32
+
+  bb.2:
+    liveins: $r0
+
+    $r0 = AND_rss 42, 0
+    RET implicit $blink, implicit $r0
+...
+---
+# Test 3: Unconditional branch to fallthrough removal. bb.0 has a conditional
+# branch to bb.2 and an unconditional branch to bb.1 (layout successor).
+# The branch folder should remove the redundant unconditional branch.
+name:            branch_to_fallthrough
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  ; CHECK-LABEL: name: branch_to_fallthrough
+  ; The unconditional B to the fallthrough bb.1 should be removed.
+  ; CHECK:      bb.0:
+  ; CHECK:        BRcc_rr %bb.2, $r0, $r1, 9
+  ; CHECK-NOT:    B %bb
+  ; CHECK:      bb.1:
+  ; CHECK:        RET
+  ; CHECK:      bb.2:
+  ; CHECK:        RET
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r0, $r1
+
+    BRcc_rr %bb.2, $r0, $r1, 9
+    B %bb.1, 0, 0, implicit $status32
+
+  bb.1:
+    liveins: $r0
+
+    $r0 = AND_rss 10, 0
+    RET implicit $blink, implicit $r0
+
+  bb.2:
+    liveins: $r0
+
+    $r0 = AND_rss 20, 0
+    RET implicit $blink, implicit $r0
+...
+---
+# Test 4: Dead block elimination. bb.0 jumps to bb.2 skipping bb.1.
+# bb.1 is unreachable, so the branch folder should remove it and
+# eliminate the now-redundant unconditional branch.
+name:            uncond_branch_only
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  ; CHECK-LABEL: name: uncond_branch_only
+  ; After dead block elimination, bb.0 falls through to the return.
+  ; CHECK:      bb.0:
+  ; CHECK-NOT:    B %bb
+  ; CHECK:        RET
+  bb.0:
+    successors: %bb.2(0x80000000)
+    liveins: $r0
+
+    B %bb.2, 0, 0, implicit $status32
+
+  bb.1:
+    liveins: $r0
+
+    $r0 = AND_rss 99, 0
+    RET implicit $blink, implicit $r0
+
+  bb.2:
+    liveins: $r0
+
+    RET implicit $blink, implicit $r0
+...
+---
+# Test 5: Chain of conditional branches in separate blocks.
+# Tests that the branch analyzer correctly processes multiple blocks,
+# each with a cond+uncond pair, removing redundant fallthrough branches.
+name:            chained_cond_branches
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  ; CHECK-LABEL: name: chained_cond_branches
+  ; Both unconditional branches to fallthrough successors should be removed.
+  ; CHECK:      bb.0:
+  ; CHECK:        BRcc_rr %bb.3, $r0, $r1, 9
+  ; CHECK-NOT:    B %bb
+  ; CHECK:      bb.1:
+  ; CHECK:        BRcc_rr %bb.3, $r0, $r2, 1
+  ; CHECK-NOT:    B %bb
+  ; CHECK:      bb.2:
+  ; CHECK:        $r0 = AND_rss 3, 0
+  ; CHECK:      bb.3:
+  ; CHECK:        RET
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.3(0x40000000)
+    liveins: $r0, $r1, $r2
+
+    BRcc_rr %bb.3, $r0, $r1, 9
+    B %bb.1, 0, 0, implicit $status32
+
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+    liveins: $r0, $r2
+
+    BRcc_rr %bb.3, $r0, $r2, 1
+    B %bb.2, 0, 0, implicit $status32
+
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $r0
+
+    $r0 = AND_rss 3, 0
+
+  bb.3:
+    liveins: $r0
+
+    RET implicit $blink, implicit $r0
+...

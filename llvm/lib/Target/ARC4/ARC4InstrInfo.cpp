@@ -71,22 +71,11 @@ void ARC4InstrInfo::storeRegToStackSlot(
 // === Branch analysis helpers ===
 
 static bool isUncondBranch(const MachineInstr &MI) {
-  // B with q=0 (always) is unconditional
-  if (MI.getOpcode() == ARC4::B) {
-    // q operand is the second operand (offset, q, n)
-    return MI.getOperand(1).getImm() == 0; // q == AL (always)
-  }
-  return false;
+  return MI.getOpcode() == ARC4::B;
 }
 
 static bool isCondBranch(const MachineInstr &MI) {
-  // BRcc_rr is always conditional
-  if (MI.getOpcode() == ARC4::BRcc_rr)
-    return true;
-  // B with q != 0 is conditional
-  if (MI.getOpcode() == ARC4::B)
-    return MI.getOperand(1).getImm() != 0;
-  return false;
+  return MI.getOpcode() == ARC4::BRcc_rr || MI.getOpcode() == ARC4::Bcc;
 }
 
 bool ARC4InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
@@ -95,83 +84,75 @@ bool ARC4InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
                                   SmallVectorImpl<MachineOperand> &Cond,
                                   bool AllowModify) const {
   TBB = FBB = nullptr;
+  Cond.clear();
+
+  // If the block has no terminators, it just falls into the block after it.
   MachineBasicBlock::iterator I = MBB.getLastNonDebugInstr();
-  if (I == MBB.end())
+  if (I == MBB.end() || !I->isTerminator())
     return false;
 
-  // Walk backwards through terminators.
-  while (I->isTerminator()) {
-    if (I->isDebugInstr()) {
-      if (I == MBB.begin())
-        return false;
-      --I;
+  // Count terminators and find the first unconditional/indirect branch.
+  MachineBasicBlock::iterator FirstUncondOrIndirectBr = MBB.end();
+  int NumTerminators = 0;
+  for (auto J = I.getReverse();
+       J != MBB.rend() && J->isTerminator(); ++J) {
+    if (J->isDebugInstr())
       continue;
-    }
-
-    if (I->getOpcode() == ARC4::RET || I->isReturn()) {
-      // Return — can't analyze further.
-      return true;
-    }
-
-    if (I->getOpcode() == ARC4::J_r || I->getOpcode() == ARC4::JL_r) {
-      // Indirect branch/call — can't analyze.
-      return true;
-    }
-
-    if (isUncondBranch(*I)) {
-      // Unconditional branch.
-      if (!AllowModify) {
-        TBB = I->getOperand(0).getMBB();
-        return false;
-      }
-      // If preceded by conditional branch, this is the fallthrough.
-      // Delete any code after this.
-      MachineBasicBlock::iterator Next = std::next(I);
-      while (Next != MBB.end()) {
-        MachineInstr &Dead = *Next;
-        ++Next;
-        Dead.eraseFromParent();
-      }
-      Cond.clear();
-      FBB = nullptr;
-      TBB = I->getOperand(0).getMBB();
-
-      // If this is the only terminator, we're done.
-      if (I == MBB.begin())
-        return false;
-      --I;
-      if (!isCondBranch(*I)) {
-        return false;
-      }
-      // Fall through to conditional branch handling.
-    }
-
-    if (I->getOpcode() == ARC4::BRcc_rr) {
-      // Conditional branch: BRcc_rr target, lhs, rhs, cc
-      if (!Cond.empty())
-        return true; // Multiple conditional branches — bail.
-      FBB = TBB;     // Previous uncond target becomes false branch.
-      TBB = I->getOperand(0).getMBB();
-      Cond.push_back(I->getOperand(1)); // lhs
-      Cond.push_back(I->getOperand(2)); // rhs
-      Cond.push_back(I->getOperand(3)); // cc
-      if (I == MBB.begin())
-        return false;
-      --I;
-      continue;
-    }
-
-    if (I->getOpcode() == ARC4::B && I->getOperand(1).getImm() != 0) {
-      // Conditional B with condition code in q operand.
-      // This shouldn't normally appear (we use BRcc_rr), but handle it.
-      return true; // Can't analyze directly.
-    }
-
-    // Unknown terminator.
-    return true;
+    NumTerminators++;
+    if (isUncondBranch(*J) || J->isIndirectBranch())
+      FirstUncondOrIndirectBr = J.getReverse();
   }
 
-  return false;
+  // If AllowModify is true, erase any terminators after the first
+  // unconditional or indirect branch.
+  if (AllowModify && FirstUncondOrIndirectBr != MBB.end()) {
+    while (std::next(FirstUncondOrIndirectBr) != MBB.end()) {
+      std::next(FirstUncondOrIndirectBr)->eraseFromParent();
+      NumTerminators--;
+    }
+    I = FirstUncondOrIndirectBr;
+  }
+
+  // Can't handle indirect branches (J_r) or returns.
+  if (I->isIndirectBranch() || I->isReturn())
+    return true;
+
+  // Can't handle blocks with more than 2 terminators.
+  if (NumTerminators > 2)
+    return true;
+
+  // Handle a single unconditional branch.
+  if (NumTerminators == 1 && isUncondBranch(*I)) {
+    TBB = I->getOperand(0).getMBB();
+    return false;
+  }
+
+  // Handle a single conditional branch.
+  if (NumTerminators == 1 && isCondBranch(*I)) {
+    if (I->getOpcode() != ARC4::BRcc_rr)
+      return true; // Can't analyze bare conditional B.
+    TBB = I->getOperand(0).getMBB();
+    Cond.push_back(I->getOperand(1)); // lhs
+    Cond.push_back(I->getOperand(2)); // rhs
+    Cond.push_back(I->getOperand(3)); // cc
+    return false;
+  }
+
+  // Handle a conditional branch followed by an unconditional branch.
+  if (NumTerminators == 2 && isUncondBranch(*I)) {
+    auto PrevI = std::prev(I);
+    if (PrevI->getOpcode() != ARC4::BRcc_rr)
+      return true; // Can't analyze.
+    TBB = PrevI->getOperand(0).getMBB();
+    Cond.push_back(PrevI->getOperand(1)); // lhs
+    Cond.push_back(PrevI->getOperand(2)); // rhs
+    Cond.push_back(PrevI->getOperand(3)); // cc
+    FBB = I->getOperand(0).getMBB();
+    return false;
+  }
+
+  // Otherwise, can't handle this.
+  return true;
 }
 
 unsigned ARC4InstrInfo::insertBranch(MachineBasicBlock &MBB,

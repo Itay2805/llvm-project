@@ -46,7 +46,7 @@ static void buildSuffixString(const MCInst *MI, const MCInstrDesc &Desc,
   // === Jump: last 3 = f, q, n ===
   switch (Opc) {
   case ARC4::J_r: case ARC4::J_l:
-  case ARC4::JL_r: case ARC4::JL_l: {
+  case ARC4::JL_r: case ARC4::JL_l: case ARC4::JL_call: {
     int F = MI->getOperand(ExpOps - 3).getImm();
     int Q = MI->getOperand(ExpOps - 2).getImm();
     int N = MI->getOperand(ExpOps - 1).getImm();
@@ -61,7 +61,8 @@ static void buildSuffixString(const MCInst *MI, const MCInstrDesc &Desc,
 
   // === Branch: last 2 = q, n ===
   switch (Opc) {
-  case ARC4::B: case ARC4::BL: case ARC4::LP_insn: {
+  case ARC4::B: case ARC4::Bcc: case ARC4::BL: case ARC4::BL_call:
+  case ARC4::LP_insn: {
     int Q = MI->getOperand(ExpOps - 2).getImm();
     int N = MI->getOperand(ExpOps - 1).getImm();
     if (Q > 0 && Q < 16) OS << CondCodeNames[Q];

@@ -249,10 +249,15 @@ defm EXTW : SOP<0b001000, "extw">;
 //===----------------------------------------------------------------------===//
 
 let isBranch = 1, isTerminator = 1 in {
-  // Unconditional branch (q=0) and conditional branch (q!=0).
-  // When used conditionally, this reads STATUS32 flags.
-  let Uses = [STATUS32] in
+  // Unconditional branch (q=0).
+  let isBarrier = 1 in
   def B : ARC4InstBranch<0b00100,
+    (outs), (ins brtarget20:$offset, i32imm:$q, i32imm:$n),
+    "b\t$offset", []>;
+
+  // Conditional branch (q!=0). Reads STATUS32 flags.
+  let Uses = [STATUS32] in
+  def Bcc : ARC4InstBranch<0b00100,
     (outs), (ins brtarget20:$offset, i32imm:$q, i32imm:$n),
     "b\t$offset", []>;
 }
@@ -673,8 +678,9 @@ let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
 // JL_r: indirect call through register
 //===----------------------------------------------------------------------===//
 
-let isCall = 1, Defs = [BLINK], Uses = [SP] in {
-  // Direct call — codegen pattern (with link)
+let isCall = 1, Defs = [BLINK], Uses = [SP], isCodeGenOnly = 1 in {
+  // Direct call — codegen pattern (with link).
+  // isCodeGenOnly: hardcoded q/n/f fields must not participate in asm matching.
   def BL_call : ARC4InstBranch<0b00101,
     (outs), (ins calltarget20:$offset, i32imm:$q, i32imm:$n),
     "bl\t$offset",
@@ -683,7 +689,8 @@ let isCall = 1, Defs = [BLINK], Uses = [SP] in {
     let n = 0;
   }
 
-  // Indirect call through register — codegen pattern
+  // Indirect call through register — codegen pattern.
+  // isCodeGenOnly: hardcoded q/f/n fields must not participate in asm matching.
   def JL_call : ARC4InstJumpReg<1,
     (outs), (ins GPR32:$b, i32imm:$f, i32imm:$q, i32imm:$n),
     "jl\t[$b]",
@@ -712,7 +719,8 @@ def : Pat<(ARC4callind i32:$b), (JL_call GPR32:$b, 0, 0, 0)>;
 def ARC4cmp_frag : PatFrag<(ops node:$lhs, node:$rhs),
                             (ARC4cmp node:$lhs, node:$rhs)>;
 
-let Defs = [STATUS32], hasSideEffects = 0, isCompare = 1 in
+let Defs = [STATUS32], hasSideEffects = 0, isCompare = 1,
+    isCodeGenOnly = 1 in
 def CMP_rr : ARC4InstALU3_rrr<0b01010,
   (outs), (ins GPR32:$b, GPR32:$c, i32imm:$f, i32imm:$q),
   "sub\t0, $b, $c", []> {

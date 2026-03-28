@@ -62,7 +62,7 @@ void ARC4AsmPrinter::emitInstruction(const MachineInstr *MI) {
     EmitToStreamer(*OutStreamer, CmpInst);
 
     MCInst BrInst;
-    BrInst.setOpcode(ARC4::B);
+    BrInst.setOpcode(ARC4::Bcc);
     BrInst.addOperand(MCInstLowering.LowerOperand(MI->getOperand(0))); // target
     BrInst.addOperand(MCInstLowering.LowerOperand(MI->getOperand(3))); // cc
     BrInst.addOperand(MCOperand::createImm(0)); // n=0

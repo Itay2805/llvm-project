@@ -503,7 +503,11 @@ static DecodeStatus decodeSOP(MCInst &Inst, uint32_t W, uint32_t Limm,
 static DecodeStatus decodeBranch(MCInst &Inst, uint32_t W, uint64_t Addr) {
   unsigned Opc5 = getOpcode5(W);
   switch (Opc5) {
-  case 4: Inst.setOpcode(ARC4::B); break;
+  case 4: {
+    unsigned Q = getFieldQ(W);
+    Inst.setOpcode(Q == 0 ? ARC4::B : ARC4::Bcc);
+    break;
+  }
   case 5: Inst.setOpcode(ARC4::BL); break;
   case 6: Inst.setOpcode(ARC4::LP_insn); break;
   default: return MCDisassembler::Fail;
