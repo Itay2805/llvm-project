@@ -39,6 +39,7 @@ BitVector ARC4RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(ARC4::R29);  // ilink1
   Reserved.set(ARC4::R30);  // ilink2
   Reserved.set(ARC4::R31);  // blink
+  Reserved.set(ARC4::STATUS); // implicit condition codes
   Reserved.set(ARC4::R60);  // lp_count
   Reserved.set(ARC4::R61);  // sentinel
   Reserved.set(ARC4::R62);  // sentinel

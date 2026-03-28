@@ -43,6 +43,14 @@ def R61 : ARC4Reg<61, "r61">;
 def R62 : ARC4Reg<62, "r62">;
 def R63 : ARC4Reg<63, "r63">;
 
+// STATUS — implicit condition-code register (like ARM CPSR).
+// Not a real hardware register in the encoding; used only to express
+// the data dependency between flag-setting instructions (CMP, SUB.F)
+// and flag-reading instructions (BRcc, SELECT_CC).
+def STATUS : Register<"status"> {
+  let Namespace = "ARC4";
+}
+
 // Register classes
 // GR: all user-addressable general-purpose registers
 def GR : RegisterClass<"ARC4", [i32], 32,

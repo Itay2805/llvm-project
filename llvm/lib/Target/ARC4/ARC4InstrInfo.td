@@ -457,12 +457,12 @@ def CG_STri : ARC4ShimmFmt<0x02, (outs), (ins GR:$src, GR:$base, simm9:$off),
 def CG_CMPrr : ARC4RegFmt<0x0A, (outs), (ins GR:$src1, GR:$src2),
     "sub.f\t0, $src1, $src2",
     [(ARC4cmp GR:$src1, GR:$src2)]> {
-  let Defs = []; // flags are implicit
+  let Defs = [STATUS];
 }
 
 def CG_CMPri : ARC4ShimmFmt<0x0A, (outs), (ins GR:$src1, simm9:$imm),
     "sub.f\t0, $src1, $imm", []> {
-  let Defs = [];
+  let Defs = [STATUS];
 }
 
 // --- Conditional branch ---
@@ -470,6 +470,7 @@ def CG_BRcc : ARC4BranchFmt<0x04, (outs), (ins imm32:$target, imm1:$cc),
     "b\t$target", []> {
   let isBranch = 1;
   let isTerminator = 1;
+  let Uses = [STATUS];
 }
 
 // --- Unconditional branch ---
@@ -522,6 +523,7 @@ def CG_SELECT_CC : Pseudo<(outs GR:$dst),
     "# SELECT_CC $dst, $truev, $falsev, $cc",
     [(set GR:$dst, (ARC4selectcc GR:$truev, GR:$falsev, (i32 imm:$cc)))]> {
   let usesCustomInserter = 1;
+  let Uses = [STATUS];
 }
 
 // --- Shift-by-1 codegen instructions ---

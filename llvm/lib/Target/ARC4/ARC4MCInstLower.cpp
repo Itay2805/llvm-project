@@ -213,11 +213,17 @@ void ARC4MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       OutMI.addOperand(LowerOperand(TargetMO));
       addRegFmtTrail(OutMI);
     } else {
-      // Symbol call: pass through to code emitter (needs limm fixup)
-      OutMI.setOpcode(ARC4::CG_CALLi);
+      // Symbol call: JL_l with limm target.
+      // NN must be .jd (2): the 8-byte jl+limm instruction means
+      // the default blink (PC+4) would point into the limm data;
+      // .jd tells the hardware to set blink past the limm (PC+8).
+      OutMI.setOpcode(ARC4::JL_l);
       MCOperand Target = LowerOperand(TargetMO);
       if (Target.isValid())
         OutMI.addOperand(Target);
+      OutMI.addOperand(MCOperand::createImm(0)); // F
+      OutMI.addOperand(MCOperand::createImm(2)); // NN = .jd
+      OutMI.addOperand(MCOperand::createImm(0)); // Q
     }
     return;
   }

@@ -45,6 +45,7 @@
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/EndianStream.h"
 
@@ -78,10 +79,10 @@ public:
                          const MCSubtargetInfo &STI) const override;
 
 private:
-  // Map MCRegister enum → 6-bit hardware encoding.
-  // ARC4RegisterInfo.td defines r0..r63 with HWEncoding=0..63;
-  // TableGen assigns enum values 1..64 in order, so enc = reg_enum - 1.
-  static uint32_t regEnc(const MCOperand &MO) { return MO.getReg() - 1; }
+  // Map MCRegister enum → 6-bit hardware encoding via HWEncoding.
+  uint32_t regEnc(const MCOperand &MO) const {
+    return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
+  }
 
   // Emit a 32-bit limm word (constant or fixup).
   // For jump/call targets, IsJumpTarget=true masks the value to STATUS[25:2].
@@ -200,11 +201,13 @@ void ARC4MCCodeEmitter::encodeInstruction(const MCInst &MI,
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     return;
   }
-  // Call with limm target: JL [limm] (I=7, A=0, B=62, bit9=1)
+  // Call with limm target: JL [limm] (I=7, A=0, B=62, bit9=1, NN=2)
   // Per spec p98: JL is encoded as J except bit 9 is set to 1.
-  // The limm replaces STATUS[25:2] (the PC), so mask to those bits.
+  // NN must be .jd (2) for jl with limm: the 8-byte instruction means
+  // the default blink (PC+4) would point into the limm data word;
+  // .jd tells the hardware to set blink = PC+8 (past the limm).
   if (Opc == ARC4::CG_CALLi) {
-    uint32_t Word = (0x07u << 27) | (62u << 15) | (1u << 9);
+    uint32_t Word = (0x07u << 27) | (62u << 15) | (1u << 9) | (2u << 5);
     support::endian::write<uint32_t>(CB, Word, llvm::endianness::little);
     emitLimm(MI.getOperand(0), /*FixupOff=*/4, Fixups, CB,
              /*IsJumpTarget=*/true);
