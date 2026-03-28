@@ -7,18 +7,18 @@
 ; Delay slots on branch (b)
 ; ============================================================
 
-; CHECK: b	100                     ; encoding: [0x20,0x32,0x00,0x20]
+; CHECK: b.d	100                     ; encoding: [0x20,0x32,0x00,0x20]
 b.d 100
 ; CHECK: b	100                     ; encoding: [0x00,0x32,0x00,0x20]
 b.nd 100
-; CHECK: b	100                     ; encoding: [0x40,0x32,0x00,0x20]
+; CHECK: b.jd	100                     ; encoding: [0x40,0x32,0x00,0x20]
 b.jd 100
 
 ; ============================================================
 ; Delay slots on branch-and-link (bl)
 ; ============================================================
 
-; CHECK: bl	100                     ; encoding: [0x20,0x32,0x00,0x28]
+; CHECK: bl.d	100                     ; encoding: [0x20,0x32,0x00,0x28]
 bl.d 100
 ; CHECK: bl	100                     ; encoding: [0x00,0x32,0x00,0x28]
 bl.nd 100
@@ -27,35 +27,35 @@ bl.nd 100
 ; Delay slots on jump (j)
 ; ============================================================
 
-; CHECK: j	r5                      ; encoding: [0x20,0x80,0x02,0x38]
+; CHECK: j.d	r5                      ; encoding: [0x20,0x80,0x02,0x38]
 j.d [r5]
 ; CHECK: j	[r5]                    ; encoding: [0x00,0x80,0x02,0x38]
 j.nd [r5]
-; CHECK: j	r5                      ; encoding: [0x40,0x80,0x02,0x38]
+; CHECK: j.jd	r5                      ; encoding: [0x40,0x80,0x02,0x38]
 j.jd [r5]
 
 ; ============================================================
 ; Delay slots on jump-and-link (jl)
 ; ============================================================
 
-; CHECK: jl	r5                      ; encoding: [0x20,0x82,0x02,0x38]
+; CHECK: jl.d	r5                      ; encoding: [0x20,0x82,0x02,0x38]
 jl.d [r5]
 ; CHECK: jl	[r5]                    ; encoding: [0x00,0x82,0x02,0x38]
 jl.nd [r5]
-; CHECK: jl	r5                      ; encoding: [0x40,0x82,0x02,0x38]
+; CHECK: jl.jd	r5                      ; encoding: [0x40,0x82,0x02,0x38]
 jl.jd [r5]
 
 ; ============================================================
 ; Combined condition code + delay slot
 ; ============================================================
 
-; CHECK: b	100                     ; encoding: [0x21,0x32,0x00,0x20]
+; CHECK: b.eq.d	100                     ; encoding: [0x21,0x32,0x00,0x20]
 b.eq.d 100
-; CHECK: b	100                     ; encoding: [0x02,0x32,0x00,0x20]
+; CHECK: b.ne	100                     ; encoding: [0x02,0x32,0x00,0x20]
 b.ne.nd 100
-; CHECK: j	r5                      ; encoding: [0x41,0x80,0x02,0x38]
+; CHECK: j.eq.jd	r5                      ; encoding: [0x41,0x80,0x02,0x38]
 j.eq.jd [r5]
-; CHECK: jl	r5                      ; encoding: [0x22,0x82,0x02,0x38]
+; CHECK: jl.ne.d	r5                      ; encoding: [0x22,0x82,0x02,0x38]
 jl.ne.d [r5]
 
 ; ============================================================
@@ -66,7 +66,7 @@ jl.ne.d [r5]
 
 ; jl with limm without suffix defaults to .jd
 ; limm stores address >> 2: 1000 >> 2 = 250 = 0xFA
-; CHECK: jl	1000                    ; encoding: [0x40,0x02,0x1f,0x38,0xfa,0x00,0x00,0x00]
+; CHECK: jl.jd	1000                    ; encoding: [0x40,0x02,0x1f,0x38,0xfa,0x00,0x00,0x00]
 jl 1000
 ; jl with register without suffix defaults to .nd (NOT .jd)
 ; CHECK: jl	[r5]                    ; encoding: [0x00,0x82,0x02,0x38]

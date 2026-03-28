@@ -7,7 +7,7 @@
 ; ============================================================
 
 ; --- .f with rrr form: bit 8 set ---
-; CHECK: add	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x40]
+; CHECK: add.f	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x40]
 add.f r0, r1, r2
 
 ; --- Without .f: bit 8 clear (baseline) ---
@@ -15,7 +15,7 @@ add.f r0, r1, r2
 add r0, r1, r2
 
 ; --- .f with shimm (rrs form): sentinel 63->61 in C field ---
-; CHECK: add	r0, r1, 5               ; encoding: [0x05,0xfa,0x00,0x40]
+; CHECK: add.f	r0, r1, 5               ; encoding: [0x05,0xfa,0x00,0x40]
 add.f r0, r1, 5
 
 ; --- Without .f shimm (baseline): sentinel 63 in C field ---
@@ -23,47 +23,47 @@ add.f r0, r1, 5
 add r0, r1, 5
 
 ; --- .f with rsr form: sentinel 63->61 in B field ---
-; CHECK: add	r0, 5, r1               ; encoding: [0x05,0x82,0x1e,0x40]
+; CHECK: add.f	r0, 5, r1               ; encoding: [0x05,0x82,0x1e,0x40]
 add.f r0, 5, r1
 
 ; --- .f with sub ---
-; CHECK: sub	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x50]
+; CHECK: sub.f	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x50]
 sub.f r0, r1, r2
 
 ; --- .f with and ---
-; CHECK: and	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x60]
+; CHECK: and.f	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x60]
 and.f r0, r1, r2
 
 ; --- .f with or ---
-; CHECK: or	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x68]
+; CHECK: or.f	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x68]
 or.f r0, r1, r2
 
 ; --- .f with xor ---
-; CHECK: xor	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x78]
+; CHECK: xor.f	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x78]
 xor.f r0, r1, r2
 
 ; --- .f with bic ---
-; CHECK: bic	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x70]
+; CHECK: bic.f	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x70]
 bic.f r0, r1, r2
 
 ; --- .f with adc ---
-; CHECK: adc	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x48]
+; CHECK: adc.f	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x48]
 adc.f r0, r1, r2
 
 ; --- .f with sbc ---
-; CHECK: sbc	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x58]
+; CHECK: sbc.f	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x58]
 sbc.f r0, r1, r2
 
 ; --- .f on SOP: asr ---
-; CHECK: asr	r1, r2                  ; encoding: [0x00,0x03,0x21,0x18]
+; CHECK: asr.f	r1, r2                  ; encoding: [0x00,0x03,0x21,0x18]
 asr.f r1, r2
 
 ; --- .f on SOP: lsr ---
-; CHECK: lsr	r1, r2                  ; encoding: [0x00,0x05,0x21,0x18]
+; CHECK: lsr.f	r1, r2                  ; encoding: [0x00,0x05,0x21,0x18]
 lsr.f r1, r2
 
 ; --- .f on jump ---
-; CHECK: j	r5                      ; encoding: [0x00,0x81,0x02,0x38]
+; CHECK: j.f	r5                      ; encoding: [0x00,0x81,0x02,0x38]
 j.f [r5]
 
 ; ============================================================
@@ -71,23 +71,23 @@ j.f [r5]
 ; ============================================================
 
 ; --- .eq (cc=1) in bits [4:0] ---
-; CHECK: add	r0, r1, r2              ; encoding: [0x01,0x84,0x00,0x40]
+; CHECK: add.eq	r0, r1, r2              ; encoding: [0x01,0x84,0x00,0x40]
 add.eq r0, r1, r2
 
 ; --- .ne (cc=2) ---
-; CHECK: add	r0, r1, r2              ; encoding: [0x02,0x84,0x00,0x40]
+; CHECK: add.ne	r0, r1, r2              ; encoding: [0x02,0x84,0x00,0x40]
 add.ne r0, r1, r2
 
 ; --- .gt (cc=9) ---
-; CHECK: add	r0, r1, r2              ; encoding: [0x09,0x84,0x00,0x40]
+; CHECK: add.gt	r0, r1, r2              ; encoding: [0x09,0x84,0x00,0x40]
 add.gt r0, r1, r2
 
 ; --- .ne on branch: bits [4:0]=2 ---
-; CHECK: b	100                     ; encoding: [0x02,0x32,0x00,0x20]
+; CHECK: b.ne	100                     ; encoding: [0x02,0x32,0x00,0x20]
 b.ne 100
 
 ; --- .eq on branch ---
-; CHECK: b	100                     ; encoding: [0x01,0x32,0x00,0x20]
+; CHECK: b.eq	100                     ; encoding: [0x01,0x32,0x00,0x20]
 b.eq 100
 
 ; ============================================================
@@ -95,11 +95,11 @@ b.eq 100
 ; ============================================================
 
 ; --- .d (delay=1) on branch: bits [6:5]=01 ---
-; CHECK: b	100                     ; encoding: [0x20,0x32,0x00,0x20]
+; CHECK: b.d	100                     ; encoding: [0x20,0x32,0x00,0x20]
 b.d 100
 
 ; --- .jd (delay=2) on jump: bits [6:5]=10 ---
-; CHECK: j	r5                      ; encoding: [0x40,0x80,0x02,0x38]
+; CHECK: j.jd	r5                      ; encoding: [0x40,0x80,0x02,0x38]
 j.jd [r5]
 
 ; --- .nd (delay=0, default) on branch: bits [6:5]=00 ---
@@ -107,7 +107,7 @@ j.jd [r5]
 b.nd 100
 
 ; --- .d on bl (branch and link) ---
-; CHECK: bl	100                     ; encoding: [0x20,0x32,0x00,0x28]
+; CHECK: bl.d	100                     ; encoding: [0x20,0x32,0x00,0x28]
 bl.d 100
 
 ; ============================================================
@@ -127,17 +127,17 @@ sub r0, 3, 3
 ; ============================================================
 
 ; --- .eq.f: condition code AND flag ---
-; CHECK: add	r0, r1, r2              ; encoding: [0x01,0x85,0x00,0x40]
+; CHECK: add.eq.f	r0, r1, r2              ; encoding: [0x01,0x85,0x00,0x40]
 add.eq.f r0, r1, r2
 
 ; --- .f.eq: order should not matter ---
-; CHECK: add	r0, r1, r2              ; encoding: [0x01,0x85,0x00,0x40]
+; CHECK: add.eq.f	r0, r1, r2              ; encoding: [0x01,0x85,0x00,0x40]
 add.f.eq r0, r1, r2
 
 ; --- .ne.d on branch: condition AND delay ---
-; CHECK: b	100                     ; encoding: [0x22,0x32,0x00,0x20]
+; CHECK: b.ne.d	100                     ; encoding: [0x22,0x32,0x00,0x20]
 b.ne.d 100
 
 ; --- .d.ne on branch: order should not matter ---
-; CHECK: b	100                     ; encoding: [0x22,0x32,0x00,0x20]
+; CHECK: b.ne.d	100                     ; encoding: [0x22,0x32,0x00,0x20]
 b.d.ne 100

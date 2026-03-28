@@ -29,10 +29,10 @@ sbc 0, r1, r2
 ; ALU3 discard with .f — A flips to sentinel 61
 ; ============================================================
 
-; CHECK: add	0, r1, r2               ; encoding: [0x00,0x85,0xa0,0x47]
+; CHECK: add.f	0, r1, r2               ; encoding: [0x00,0x85,0xa0,0x47]
 add.f 0, r1, r2
-; sub.f 0, r3, r4 prints as "cmp r3, r4" because the cmp alias matches
-; CHECK: cmp	r3, r4                  ; encoding: [0x00,0x89,0xa1,0x57]
+; sub.f 0, r3, r4 prints as "cmp.f r3, r4" because the cmp alias matches and .f is printed
+; CHECK: cmp.f	r3, r4                  ; encoding: [0x00,0x89,0xa1,0x57]
 sub.f 0, r3, r4
 
 ; ============================================================
@@ -67,7 +67,7 @@ asr 0, 5
 asr 0, 1000
 
 ; SOP discard with .f
-; CHECK: asr	0, r1                   ; encoding: [0x00,0x83,0xa0,0x1f]
+; CHECK: asr.f	0, r1                   ; encoding: [0x00,0x83,0xa0,0x1f]
 asr.f 0, r1
 
 ; ============================================================
