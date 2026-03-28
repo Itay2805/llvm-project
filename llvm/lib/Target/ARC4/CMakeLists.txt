@@ -15,6 +15,7 @@ add_llvm_target(ARC4CodeGen
   ARC4TargetMachine.cpp
 
   LINK_COMPONENTS
+  ARC4Desc
   ARC4Info
   Core
   MC
@@ -27,3 +28,4 @@ add_llvm_target(ARC4CodeGen
   )
 
 add_subdirectory(TargetInfo)
+add_subdirectory(MCTargetDesc)
