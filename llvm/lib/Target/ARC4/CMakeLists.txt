@@ -18,6 +18,8 @@ add_llvm_target(ARC4CodeGen
   ARC4AsmParser
   ARC4Desc
   ARC4Info
+  CodeGen
+  CodeGenTypes
   Core
   MC
   Support
