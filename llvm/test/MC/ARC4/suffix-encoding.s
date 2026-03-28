@@ -30,6 +30,42 @@ add.f r0, 5, r1
 ; CHECK: sub	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x50]
 sub.f r0, r1, r2
 
+; --- .f with and ---
+; CHECK: and	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x60]
+and.f r0, r1, r2
+
+; --- .f with or ---
+; CHECK: or	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x68]
+or.f r0, r1, r2
+
+; --- .f with xor ---
+; CHECK: xor	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x78]
+xor.f r0, r1, r2
+
+; --- .f with bic ---
+; CHECK: bic	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x70]
+bic.f r0, r1, r2
+
+; --- .f with adc ---
+; CHECK: adc	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x48]
+adc.f r0, r1, r2
+
+; --- .f with sbc ---
+; CHECK: sbc	r0, r1, r2              ; encoding: [0x00,0x85,0x00,0x58]
+sbc.f r0, r1, r2
+
+; --- .f on SOP: asr ---
+; CHECK: asr	r1, r2                  ; encoding: [0x00,0x03,0x21,0x18]
+asr.f r1, r2
+
+; --- .f on SOP: lsr ---
+; CHECK: lsr	r1, r2                  ; encoding: [0x00,0x05,0x21,0x18]
+lsr.f r1, r2
+
+; --- .f on jump ---
+; CHECK: j	r5                      ; encoding: [0x00,0x81,0x02,0x38]
+j.f [r5]
+
 ; ============================================================
 ; Condition code encoding
 ; ============================================================
